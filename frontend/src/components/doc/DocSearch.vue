@@ -194,5 +194,14 @@ const sourceType = (s) => ({ 1: 'primary', 2: 'warning', 3: 'success' }[s] || 'i
 </script>
 
 <style scoped>
-.card-header { display:flex; justify-content:space-between; align-items:center; font-weight:600; }
+pre {
+  white-space: pre-wrap;
+  background: #0d1117;
+  border: 1px solid rgba(255,255,255,0.08);
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #cbd5e1;
+}
 </style>

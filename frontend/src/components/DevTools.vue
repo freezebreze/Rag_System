@@ -82,18 +82,7 @@ const check = async () => {
 
 <style scoped>
 .devtools { max-width: 1100px; }
-.card-header { display:flex; justify-content:space-between; align-items:center; font-weight:600; }
-.info-block { padding: 12px; background: #f5f7fa; border-radius: 6px; }
-.info-label { font-size: 12px; color: #909399; font-weight: 600; }
-.info-value { font-size: 14px; color: #303133; margin-top: 4px; }
-.json-pre {
-  margin: 8px 0 0;
-  padding: 10px;
-  background: #1e1e1e;
-  color: #d4d4d4;
-  border-radius: 6px;
-  font-size: 12px;
-  overflow-x: auto;
-  max-height: 260px;
-}
+.info-block { padding: 12px; background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; }
+.info-label { font-size: 12px; color: #94a3b8; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+.info-value { font-size: 14px; color: #e2e8f0; margin-top: 4px; }
 </style>

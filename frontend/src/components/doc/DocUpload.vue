@@ -429,6 +429,5 @@ const startChunkingDirect = async () => {
 </script>
 
 <style scoped>
-.tip { font-size:12px; color:#909399; margin-top:4px; }
 :deep(.el-upload-dragger) { padding: 30px; }
 </style>

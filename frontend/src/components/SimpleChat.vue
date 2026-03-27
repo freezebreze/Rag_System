@@ -1,533 +1,633 @@
 <template>
   <div class="chat-wrapper">
-    <!-- 模式切换 + 工具栏 -->
+    <!-- Toolbar -->
     <div class="chat-toolbar">
-      <el-radio-group v-model="chatMode" size="small">
-        <el-radio-button value="general">
-          <el-icon style="margin-right:4px"><cpu /></el-icon>普通对话
-        </el-radio-button>
-        <el-radio-button value="knowledge">
-          <el-icon style="margin-right:4px"><document /></el-icon>知识库
-        </el-radio-button>
-      </el-radio-group>
-
+      <div class="mode-tabs">
+        <button v-for="m in modes" :key="m.value"
+          class="mode-tab" :class="{ active: chatMode === m.value }"
+          @click="chatMode = m.value">
+          <el-icon><component :is="m.icon" /></el-icon>
+          <span>{{ m.label }}</span>
+          <span v-if="chatMode === m.value" class="mode-tab-glow" />
+        </button>
+      </div>
       <div class="toolbar-right">
-        <!-- 知识库模式下显示知识库选择器 -->
         <template v-if="chatMode === 'knowledge'">
-          <el-select
-            v-model="selectedCollection"
-            size="small"
-            placeholder="选择知识库"
-            style="width:200px;margin-right:8px"
-            clearable
-            @change="clearMessages"
-          >
-            <el-option
-              v-for="col in collections"
-              :key="col.collection_name"
-              :label="col.collection_name"
-              :value="col.collection_name"
-            />
-          </el-select>
-          <span v-if="collections.length === 0" style="font-size:12px;color:#f56c6c;margin-right:8px">
-            暂无知识库，请先创建
-          </span>
+          <div class="collection-select-wrap">
+            <el-icon class="col-icon"><data-analysis /></el-icon>
+            <el-select v-model="selectedCollection" size="small" placeholder="选择知识库"
+              style="width:180px" clearable @change="clearMessages">
+              <el-option v-for="col in collections" :key="col.collection_name"
+                :label="col.collection_name" :value="col.collection_name" />
+            </el-select>
+          </div>
+          <span v-if="collections.length === 0" class="no-kb-hint">暂无知识库</span>
         </template>
-        <el-tag
-          :type="chatMode === 'general' ? 'info' : 'success'"
-          size="small"
-          style="margin-right:8px"
-        >
-          {{ chatMode === 'general' ? 'Supervisor 多工具' : '向量检索 + Rerank' }}
-        </el-tag>
-        <el-button size="small" plain @click="clearMessages">清空对话</el-button>
+        <div class="mode-badge" :class="chatMode">
+          {{ chatMode === 'general' ? 'Multi-Agent' : 'RAG + Rerank' }}
+        </div>
+        <button class="icon-btn" @click="clearMessages" title="清空对话">
+          <el-icon><delete /></el-icon>
+        </button>
       </div>
     </div>
 
-    <!-- 消息区 -->
+    <!-- Messages -->
     <div class="messages" ref="messagesContainer">
-      <div
-        v-for="(msg, i) in messages"
-        :key="i"
-        :class="['msg-row', msg.role]"
-      >
-        <!-- 头像 -->
-        <div class="avatar">
-          <el-avatar v-if="msg.role === 'assistant'" :size="32" style="background:#409eff">AI</el-avatar>
-          <el-avatar v-else :size="32" style="background:#67c23a">我</el-avatar>
+      <!-- Welcome screen -->
+      <transition name="fade">
+        <div v-if="messages.length === 0" class="welcome-screen">
+          <div class="welcome-orb">
+            <div class="orb-ring" />
+            <div class="orb-ring orb-ring-2" />
+            <el-icon class="orb-icon"><cpu /></el-icon>
+          </div>
+          <h2 class="welcome-title">{{ chatMode === 'knowledge' ? 'Knowledge Assistant' : 'AI Assistant' }}</h2>
+          <p class="welcome-sub">{{ chatMode === 'knowledge' ? '基于企业知识库，智能检索 + Rerank 重排序' : '多工具智能体，支持邮件、搜索等工具调用' }}</p>
+          <div class="suggestion-grid">
+            <button v-for="s in suggestions[chatMode]" :key="s" class="suggestion-card" @click="useSuggestion(s)">
+              <el-icon><arrow-right /></el-icon>
+              <span>{{ s }}</span>
+            </button>
+          </div>
         </div>
+      </transition>
 
-        <div class="bubble-wrap">
-          <div class="bubble">
-            <div class="bubble-text" style="white-space: pre-wrap" v-if="!msg.isHtml">{{ msg.content }}</div>
-            <div class="bubble-text" v-else v-html="msg.content"></div>
+      <!-- Message list -->
+      <transition-group name="msg" tag="div">
+        <div v-for="(msg, i) in messages" :key="i" :class="['msg-row', msg.role]">
+          <div v-if="msg.role === 'assistant'" class="ai-avatar">
+            <div class="ai-avatar-ring" />
+            <div class="ai-avatar-bg" />
+            <el-icon class="ai-avatar-icon"><cpu /></el-icon>
+          </div>
+          <div v-else class="user-avatar"><span>我</span></div>
 
-            <!-- 工具调用标签 -->
-            <div v-if="msg.tools_used && msg.tools_used.length" class="bubble-meta">
-              <el-icon style="font-size:11px;margin-right:3px"><tools /></el-icon>
-              <el-tag
-                v-for="t in msg.tools_used"
-                :key="t"
-                size="small"
-                type="warning"
-                style="margin-right:4px;font-size:11px"
-              >{{ t }}</el-tag>
-            </div>
+          <div class="bubble-wrap">
+            <div class="bubble" :class="msg.role">
+              <div class="bubble-text" v-if="!msg.isHtml" style="white-space:pre-wrap">{{ msg.content }}</div>
+              <div class="bubble-text" v-else v-html="msg.content" />
 
-            <!-- 知识库来源 -->
-            <div v-if="msg.sources && msg.sources.length" class="bubble-meta">
-              <el-icon style="font-size:11px;margin-right:4px;flex-shrink:0"><document /></el-icon>
-              <div style="display:flex;flex-wrap:wrap;gap:4px;flex:1">
-                <el-tag
-                  v-for="(name, si) in uniqueFileNames(msg.sources)"
-                  :key="si"
-                  size="small"
-                  type="info"
-                  style="font-size:11px;height:auto;white-space:normal;line-height:1.4;padding:2px 6px"
-                >{{ name }}</el-tag>
-                <span style="font-size:11px;color:#c0c4cc;align-self:center">
-                  共 {{ msg.sources.length }} 个切片
-                </span>
+              <!-- Tools -->
+              <div v-if="msg.tools_used?.length" class="meta-row">
+                <el-icon style="font-size:10px"><tools /></el-icon>
+                <span class="meta-label">Tools:</span>
+                <span v-for="t in msg.tools_used" :key="t" class="tool-chip">{{ t }}</span>
+              </div>
+
+              <!-- Sources collapsible -->
+              <div v-if="msg.sources?.length" class="sources-section">
+                <button class="sources-toggle" @click="msg._showSources = !msg._showSources">
+                  <el-icon><document /></el-icon>
+                  <span>{{ uniqueFileNames(msg.sources).length }} 个来源</span>
+                  <span class="sources-count">{{ msg.sources.length }} 切片</span>
+                  <el-icon class="toggle-arrow" :class="{ open: msg._showSources }"><arrow-down /></el-icon>
+                </button>
+                <transition name="expand">
+                  <div v-if="msg._showSources" class="sources-list">
+                    <div v-for="(name, si) in uniqueFileNames(msg.sources)" :key="si" class="source-card">
+                      <div class="source-dot" />
+                      <span class="source-name">{{ name }}</span>
+                    </div>
+                  </div>
+                </transition>
+              </div>
+
+              <!-- Confidence arc -->
+              <div v-if="msg.confidence !== undefined" class="confidence-row">
+                <svg class="conf-arc" viewBox="0 0 60 34" fill="none">
+                  <path d="M5 30 A25 25 0 0 1 55 30" stroke="rgba(255,255,255,0.08)" stroke-width="5" stroke-linecap="round"/>
+                  <path d="M5 30 A25 25 0 0 1 55 30"
+                    :stroke="confColor(msg.confidence)" stroke-width="5" stroke-linecap="round"
+                    :stroke-dasharray="`${msg.confidence * 78.5} 78.5`" style="transition:stroke-dasharray 1s ease"/>
+                  <text x="30" y="30" text-anchor="middle" font-size="9" :fill="confColor(msg.confidence)" font-weight="700">
+                    {{ Math.round(msg.confidence * 100) }}%
+                  </text>
+                </svg>
+                <span class="conf-label">置信度</span>
               </div>
             </div>
+            <div class="msg-time">{{ formatTime(msg.timestamp) }}</div>
+          </div>
+        </div>
+      </transition-group>
 
-            <!-- 置信度 -->
-            <div v-if="msg.confidence !== undefined" class="bubble-meta">
-              <el-progress
-                :percentage="Math.round(msg.confidence * 100)"
-                :stroke-width="4"
-                style="width:120px;display:inline-flex;align-items:center"
-              />
-              <span style="font-size:11px;color:#909399;margin-left:6px">置信度</span>
+      <!-- Typing indicator -->
+      <transition name="fade">
+        <div v-if="loading" class="msg-row assistant">
+          <div class="ai-avatar">
+            <div class="ai-avatar-ring pulsing" />
+            <div class="ai-avatar-bg" />
+            <el-icon class="ai-avatar-icon"><cpu /></el-icon>
+          </div>
+          <div class="bubble-wrap">
+            <div class="bubble assistant typing-bubble">
+              <div class="wave-bar" /><div class="wave-bar" /><div class="wave-bar" />
             </div>
           </div>
-          <div class="msg-time">{{ formatTime(msg.timestamp) }}</div>
         </div>
-      </div>
-
-      <!-- 加载中 -->
-      <div v-if="loading" class="msg-row assistant">
-        <div class="avatar">
-          <el-avatar :size="32" style="background:#409eff">AI</el-avatar>
-        </div>
-        <div class="bubble-wrap">
-          <div class="bubble typing-bubble">
-            <span class="dot" /><span class="dot" /><span class="dot" />
-          </div>
-        </div>
-      </div>
+      </transition>
     </div>
 
-    <!-- 输入区 -->
-    <div class="input-area">
-      <el-input
-        v-model="inputMessage"
-        type="textarea"
-        :rows="2"
-        :autosize="{ minRows: 2, maxRows: 5 }"
-        placeholder="输入消息，Enter 发送，Shift+Enter 换行"
-        :disabled="loading"
-        @keydown.enter.exact.prevent="sendMessage"
-        resize="none"
-      />
-      <el-button
-        type="primary"
-        :loading="loading"
-        :disabled="!inputMessage.trim() || (chatMode === 'knowledge' && !selectedCollection)"
-        @click="sendMessage"
-        class="send-btn"
-      >
-        发送
-      </el-button>
+    <!-- Input area -->
+    <div class="input-area" :class="{ focused: inputFocused }">
+      <div class="input-wrap">
+        <el-input v-model="inputMessage" type="textarea"
+          :autosize="{ minRows: 1, maxRows: 5 }"
+          placeholder="输入消息... (Enter 发送，Shift+Enter 换行)"
+          :disabled="loading"
+          @keydown.enter.exact.prevent="sendMessage"
+          @focus="inputFocused = true" @blur="inputFocused = false"
+          resize="none" />
+        <span class="char-count" :class="{ warn: inputMessage.length > 800 }">{{ inputMessage.length }}</span>
+      </div>
+      <button class="send-btn" :class="{ loading, disabled: !canSend }" :disabled="!canSend" @click="sendMessage">
+        <transition name="icon-swap" mode="out-in">
+          <span v-if="!loading" key="send" class="send-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <line x1="22" y1="2" x2="11" y2="13"/>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+          </span>
+          <span v-else key="spin" class="spin-ring" />
+        </transition>
+      </button>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, nextTick, watch, onMounted } from 'vue'
+import { ref, computed, nextTick, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { apiService } from '../services/api'
 import axios from 'axios'
 import MarkdownIt from 'markdown-it'
 
-const md = new MarkdownIt({
-  html: false,
-  linkify: true,
-  typographer: true,
-  breaks: true,
-})
-
+const md = new MarkdownIt({ html: false, linkify: true, typographer: true, breaks: true })
 const API = 'http://localhost:8000/api/v1'
-
-const props = defineProps({
-  model: { type: String, default: 'qwen-turbo' },
-})
+const props = defineProps({ model: { type: String, default: 'qwen-turbo' } })
 
 const chatMode = ref('general')
 const selectedCollection = ref('')
 const collections = ref([])
-
-const loadCollections = async () => {
-  try {
-    const { data } = await axios.get(`${API}/admin/collection/list`)
-    collections.value = data.data?.collections || []
-    // 自动选中第一个
-    if (collections.value.length > 0 && !selectedCollection.value) {
-      selectedCollection.value = collections.value[0].collection_name
-    }
-  } catch (e) {
-    console.error('加载知识库列表失败', e)
-  }
-}
-
-onMounted(loadCollections)
-
-const getWelcome = (mode) => mode === 'knowledge'
-  ? '你好！我是知识库助手。\n\n✅ 基于企业知识库回答问题\n✅ 提供文档引用和来源\n✅ 智能检索 + Rerank 重排序\n\n请问有什么需要查询的？'
-  : '你好！我是智能助手。\n\n✅ 自然对话（带记忆）\n✅ 发送邮件（email_agent）\n✅ 网络搜索（search_agent）\n✅ 自动判断是否调用工具\n\n有什么可以帮您的吗？'
-
-const messages = ref([{ role: 'assistant', content: getWelcome('general'), timestamp: new Date() }])
+const messages = ref([])
 const inputMessage = ref('')
 const loading = ref(false)
+const inputFocused = ref(false)
 const messagesContainer = ref(null)
 
-const scrollToBottom = () => {
-  nextTick(() => {
-    if (messagesContainer.value)
-      messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
-  })
+const modes = [
+  { value: 'general',   label: '普通对话', icon: 'Cpu' },
+  { value: 'knowledge', label: '知识库',   icon: 'Document' },
+]
+const suggestions = {
+  general:   ['你能做什么？', '帮我搜索最新资讯', '发送一封邮件'],
+  knowledge: ['这个知识库包含哪些内容？', '帮我查找相关文档', '总结一下主要知识点'],
 }
+
+const canSend = computed(() =>
+  inputMessage.value.trim() && !loading.value &&
+  !(chatMode.value === 'knowledge' && !selectedCollection.value)
+)
+const confColor = (c) => c > 0.7 ? '#2dd4a0' : c > 0.4 ? '#f5c842' : '#f06b6b'
+const scrollToBottom = () => nextTick(() => {
+  if (messagesContainer.value) messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
+})
+const useSuggestion = (text) => { inputMessage.value = text; sendMessage() }
 
 const sendMessage = async () => {
   const text = inputMessage.value.trim()
-  if (!text || loading.value) return
-
+  if (!canSend.value || !text) return
   messages.value.push({ role: 'user', content: text, timestamp: new Date() })
   inputMessage.value = ''
   loading.value = true
   scrollToBottom()
-
   try {
     if (chatMode.value === 'knowledge') {
       const res = await apiService.knowledgeQA(text, props.model, 'default', selectedCollection.value || null)
       const imageMap = res.image_map || {}
       let raw = res.answer || '抱歉，未收到有效回复。'
-      // 先替换图片占位符为 markdown 图片语法
-      Object.entries(imageMap).forEach(([placeholder, url]) => {
-        raw = raw.split(placeholder).join(`\n![image](${url})\n`)
-      })
-      // 再渲染 markdown
-      const renderedContent = md.render(raw)
+      Object.entries(imageMap).forEach(([ph, url]) => { raw = raw.split(ph).join(`\n![image](${url})\n`) })
       messages.value.push({
-        role: 'assistant',
-        content: renderedContent,
-        isHtml: true,
-        confidence: res.confidence,
-        sources: res.sources || [],
-        timestamp: new Date(),
+        role: 'assistant', isHtml: true, content: md.render(raw),
+        confidence: res.confidence, sources: res.sources || [], _showSources: false, timestamp: new Date(),
       })
     } else {
       const apiMsgs = messages.value.map(m => ({ role: m.role, content: m.content }))
       const res = await apiService.chat(apiMsgs, props.model)
       const last = res.messages?.[res.messages.length - 1]
       const toolsUsed = res.usage?.tools_used || []
-      const raw = last?.content || '抱歉，未收到有效回复。'
       messages.value.push({
-        role: 'assistant',
-        content: md.render(raw),
-        isHtml: true,
-        tools_used: toolsUsed,
-        timestamp: new Date(),
+        role: 'assistant', isHtml: true,
+        content: md.render(last?.content || '抱歉，未收到有效回复。'),
+        tools_used: toolsUsed, timestamp: new Date(),
       })
       if (toolsUsed.length) ElMessage.success(`调用工具: ${toolsUsed.join(', ')}`)
     }
   } catch (e) {
-    console.error(e)
-    ElMessage.error('发送失败')
+    console.error(e); ElMessage.error('发送失败')
     messages.value.push({ role: 'assistant', content: '抱歉，发生错误，请稍后重试。', timestamp: new Date() })
-  } finally {
-    loading.value = false
-    scrollToBottom()
-  }
+  } finally { loading.value = false; scrollToBottom() }
 }
 
-const clearMessages = () => {
-  messages.value = [{ role: 'assistant', content: getWelcome(chatMode.value), timestamp: new Date() }]
-}
-
-watch(chatMode, (mode) => {
-  messages.value = [{ role: 'assistant', content: getWelcome(mode), timestamp: new Date() }]
-})
-
-const formatTime = (t) =>
-  new Date(t).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-
-// 从 sources 列表提取去重后的文件名
+const clearMessages = () => { messages.value = [] }
+watch(chatMode, () => { messages.value = [] })
+const formatTime = (t) => new Date(t).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 const uniqueFileNames = (sources) => {
   const seen = new Set()
-  const names = []
-  for (const s of sources) {
+  return sources.reduce((acc, s) => {
     const name = s.file_name || s.title || s.id || '未知来源'
-    if (!seen.has(name)) {
-      seen.add(name)
-      names.push(name)
-    }
-  }
-  return names
+    if (!seen.has(name)) { seen.add(name); acc.push(name) }
+    return acc
+  }, [])
 }
 
+onMounted(async () => {
+  try {
+    const { data } = await axios.get(`${API}/admin/collection/list`)
+    collections.value = data.data?.collections || []
+    if (collections.value.length > 0) selectedCollection.value = collections.value[0].collection_name
+  } catch {}
+})
 defineExpose({ clearMessages })
 </script>
 
 <style scoped>
+/* ── Layout ── */
 .chat-wrapper {
-  display: flex;
-  flex-direction: column;
+  display: flex; flex-direction: column;
   height: calc(100vh - 108px);
-  background: #fff;
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+  background: rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 18px; overflow: hidden;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,255,255,0.04) inset;
 }
 
-/* 工具栏 */
+/* ── Toolbar ── */
 .chat-toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 12px 16px;
-  border-bottom: 1px solid #e4e7ed;
-  background: #fafafa;
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 10px 16px;
+  background: rgba(255,255,255,0.02);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
   flex-shrink: 0;
 }
-
-.toolbar-right {
-  display: flex;
-  align-items: center;
+.mode-tabs { display: flex; gap: 4px; }
+.mode-tab {
+  position: relative; display: flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border-radius: 9px; border: none; cursor: pointer;
+  font-size: 13px; font-weight: 500; color: rgba(255,255,255,0.35);
+  background: transparent; transition: all 0.2s; overflow: hidden;
 }
+.mode-tab:hover { color: rgba(255,255,255,0.65); background: rgba(255,255,255,0.05); }
+.mode-tab.active { color: #7eb3ff; background: rgba(79,142,247,0.12); }
+.mode-tab-glow {
+  position: absolute; inset: 0; border-radius: 9px;
+  box-shadow: inset 0 0 0 1px rgba(79,142,247,0.35);
+  pointer-events: none;
+}
+.toolbar-right { display: flex; align-items: center; gap: 10px; }
+.collection-select-wrap { display: flex; align-items: center; gap: 6px; }
+.col-icon { color: rgba(255,255,255,0.3); font-size: 14px; }
+.no-kb-hint { font-size: 11px; color: #f06b6b; }
+.mode-badge {
+  font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: 99px;
+  text-transform: uppercase; letter-spacing: 0.8px;
+}
+.mode-badge.general { background: rgba(148,163,184,0.1); color: rgba(255,255,255,0.3); }
+.mode-badge.knowledge { background: rgba(45,212,160,0.1); color: #2dd4a0; }
+.icon-btn {
+  width: 30px; height: 30px; border-radius: 8px; border: none; cursor: pointer;
+  background: rgba(255,255,255,0.05); color: rgba(255,255,255,0.3);
+  display: flex; align-items: center; justify-content: center; font-size: 14px;
+  transition: all 0.2s;
+}
+.icon-btn:hover { background: rgba(255,255,255,0.09); color: rgba(255,255,255,0.6); }
 
-/* 消息区 */
+/* ── Messages ── */
 .messages {
-  flex: 1;
-  overflow-y: auto;
-  padding: 20px 16px;
-  background: #f5f7fa;
+  flex: 1; overflow-y: auto; padding: 24px 20px;
+  display: flex; flex-direction: column; gap: 0;
+}
+.messages::-webkit-scrollbar { width: 4px; }
+.messages::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.07); border-radius: 99px; }
+
+/* ── Welcome screen ── */
+.welcome-screen {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 40px 20px; text-align: center;
+}
+.welcome-orb {
+  position: relative; width: 80px; height: 80px;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 24px;
+}
+.welcome-orb::before {
+  content: '';
+  position: absolute; inset: -20px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(79,142,247,0.25) 0%, rgba(167,139,250,0.15) 40%, transparent 70%);
+  filter: blur(20px);
+  animation: glow-pulse 3s ease-in-out infinite;
+}
+@keyframes glow-pulse {
+  0%,100% { opacity: 0.6; transform: scale(0.95); }
+  50% { opacity: 1; transform: scale(1.05); }
+}
+.orb-ring {
+  position: absolute; inset: 0; border-radius: 50%;
+  border: 1.5px solid rgba(79,142,247,0.5);
+  animation: orb-spin 4s linear infinite;
+  box-shadow: 0 0 8px rgba(79,142,247,0.3);
+}
+.orb-ring-2 {
+  inset: 10px;
+  border-color: rgba(167,139,250,0.4);
+  animation-duration: 6s; animation-direction: reverse;
+  box-shadow: 0 0 6px rgba(167,139,250,0.25);
+}
+@keyframes orb-spin { to { transform: rotate(360deg); } }
+.orb-icon {
+  font-size: 28px; color: #7eb3ff; z-index: 1;
+  filter: drop-shadow(0 0 14px rgba(79,142,247,0.8));
+}
+.welcome-title { font-size: 22px; font-weight: 700; color: #f0f4ff; margin: 0 0 8px; letter-spacing: -0.3px; }
+.welcome-sub { font-size: 13px; color: rgba(255,255,255,0.3); margin: 0 0 28px; max-width: 360px; }
+.suggestion-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-width: 560px; width: 100%; }
+.suggestion-card {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border-radius: 10px; cursor: pointer;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.07);
+  color: rgba(255,255,255,0.45); font-size: 12px; text-align: left;
+  transition: all 0.2s;
+}
+.suggestion-card:hover {
+  background: rgba(79,142,247,0.08); border-color: rgba(79,142,247,0.25);
+  color: #7eb3ff; transform: translateY(-1px);
 }
 
-.msg-row {
-  display: flex;
-  gap: 10px;
-  margin-bottom: 18px;
+/* ── Message rows ── */
+.msg-row { display: flex; gap: 12px; margin-bottom: 20px; align-items: flex-start; }
+.msg-row.user { flex-direction: row-reverse; }
+
+/* AI avatar */
+.ai-avatar {
+  position: relative; width: 36px; height: 36px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.ai-avatar::before {
+  content: '';
+  position: absolute; inset: -4px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(79,142,247,0.18) 0%, transparent 70%);
+  pointer-events: none;
+}
+.ai-avatar-ring {
+  position: absolute; inset: 0; border-radius: 50%;
+  border: 1.5px solid rgba(79,142,247,0.55);
+  animation: orb-spin 5s linear infinite;
+}
+.ai-avatar-ring::after {
+  content: '';
+  position: absolute; top: -1px; left: 30%; width: 30%; height: 2px;
+  background: linear-gradient(90deg, transparent, #7eb3ff, transparent);
+  border-radius: 99px;
+}
+.ai-avatar-ring.pulsing {
+  border-color: rgba(79,142,247,0.9);
+  animation: ring-pulse 1.2s ease-in-out infinite;
+  box-shadow: 0 0 12px rgba(79,142,247,0.5);
+}
+@keyframes ring-pulse {
+  0%,100% { opacity: 0.5; transform: scale(1); box-shadow: 0 0 6px rgba(79,142,247,0.3); }
+  50% { opacity: 1; transform: scale(1.12); box-shadow: 0 0 18px rgba(79,142,247,0.7); }
+}
+.ai-avatar-bg {
+  position: absolute; inset: 3px; border-radius: 50%;
+  background: linear-gradient(135deg, rgba(79,142,247,0.15), rgba(167,139,250,0.1));
+  border: 1px solid rgba(79,142,247,0.2);
+}
+.ai-avatar-icon { font-size: 15px; color: #7eb3ff; z-index: 1; filter: drop-shadow(0 0 6px rgba(79,142,247,0.7)); }
+
+/* User avatar */
+.user-avatar {
+  width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0;
+  background: linear-gradient(135deg, #3b6fd4 0%, #7c3aed 100%);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: #fff;
+  box-shadow: 0 2px 14px rgba(59,111,212,0.5), 0 0 0 2px rgba(91,79,207,0.25);
+  position: relative;
+}
+.user-avatar::after {
+  content: '';
+  position: absolute; inset: -3px; border-radius: 50%;
+  border: 1px solid rgba(124,58,237,0.3);
+  pointer-events: none;
 }
 
-.msg-row.user {
-  flex-direction: row-reverse;
-}
+/* Bubble wrap */
+.bubble-wrap { max-width: 70%; display: flex; flex-direction: column; }
+.msg-row.user .bubble-wrap { align-items: flex-end; }
 
-.avatar {
-  flex-shrink: 0;
-  padding-top: 2px;
-}
-
-.bubble-wrap {
-  max-width: 68%;
-  display: flex;
-  flex-direction: column;
-}
-
-.msg-row.user .bubble-wrap {
-  align-items: flex-end;
-}
-
+/* Bubbles */
 .bubble {
-  background: #fff;
-  border-radius: 12px;
-  padding: 10px 14px;
-  box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-  word-break: break-word;
+  border-radius: 16px; padding: 12px 16px;
+  word-break: break-word; position: relative;
 }
-
-.msg-row.user .bubble {
-  background: #409eff;
+.bubble.assistant {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 4px 16px 16px 16px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  padding-left: 18px;
+}
+/* 渐变竖线用伪元素实现，避免 border-image 破坏 border-radius */
+.bubble.assistant::before {
+  content: '';
+  position: absolute; left: 0; top: 6px; bottom: 6px;
+  width: 2.5px; border-radius: 99px;
+  background: linear-gradient(180deg, #4f8ef7, #a78bfa);
+  box-shadow: 0 0 8px rgba(79,142,247,0.5);
+}
+.bubble.user {
+  background: linear-gradient(135deg, #2d5fc4 0%, #6d28d9 100%);
+  border: 1px solid rgba(109,40,217,0.35);
+  border-radius: 16px 4px 16px 16px;
   color: #fff;
+  box-shadow: 0 4px 24px rgba(59,111,212,0.4), 0 0 0 1px rgba(255,255,255,0.06) inset;
+  position: relative; overflow: hidden;
+}
+/* 用户气泡内光效 */
+.bubble.user::after {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 40%;
+  background: linear-gradient(180deg, rgba(255,255,255,0.07), transparent);
+  pointer-events: none; border-radius: inherit;
 }
 
-.bubble-text {
-  font-size: 14px;
-  line-height: 1.6;
-}
-
-/* markdown 渲染样式 */
-.bubble-text :deep(h1),
-.bubble-text :deep(h2),
-.bubble-text :deep(h3),
-.bubble-text :deep(h4) {
-  margin: 10px 0 6px;
-  font-weight: 600;
-  line-height: 1.4;
-}
-.bubble-text :deep(h1) { font-size: 18px; }
-.bubble-text :deep(h2) { font-size: 16px; }
-.bubble-text :deep(h3) { font-size: 15px; }
-
-.bubble-text :deep(p) {
-  margin: 4px 0;
-}
-
-.bubble-text :deep(ul),
-.bubble-text :deep(ol) {
-  padding-left: 20px;
-  margin: 6px 0;
-}
-
-.bubble-text :deep(li) {
-  margin: 2px 0;
-}
-
-.bubble-text :deep(code) {
-  background: #f0f2f5;
-  border-radius: 3px;
-  padding: 1px 5px;
-  font-family: 'Courier New', monospace;
-  font-size: 13px;
-  color: #e6395a;
-}
-
-.bubble-text :deep(pre) {
-  background: #1e1e1e;
-  border-radius: 6px;
-  padding: 12px 14px;
-  overflow-x: auto;
-  margin: 8px 0;
-}
-
-.bubble-text :deep(pre code) {
-  background: none;
-  color: #d4d4d4;
-  padding: 0;
-  font-size: 13px;
-}
-
-.bubble-text :deep(blockquote) {
-  border-left: 3px solid #dcdfe6;
-  margin: 6px 0;
-  padding: 4px 12px;
-  color: #909399;
-}
-
-.bubble-text :deep(table) {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 8px 0;
-  font-size: 13px;
-}
-
-.bubble-text :deep(th),
-.bubble-text :deep(td) {
-  border: 1px solid #dcdfe6;
-  padding: 6px 10px;
-  text-align: left;
-}
-
-.bubble-text :deep(th) {
-  background: #f5f7fa;
-  font-weight: 600;
-}
-
-.bubble-text :deep(a) {
-  color: #409eff;
-  text-decoration: none;
-}
-
-.bubble-text :deep(a:hover) {
-  text-decoration: underline;
-}
-
+/* Bubble text / markdown */
+.bubble-text { font-size: 14px; line-height: 1.65; color: #e2e8f0; }
+.bubble.user .bubble-text { color: #fff; }
+.bubble-text :deep(p) { margin: 4px 0; }
+.bubble-text :deep(h1),.bubble-text :deep(h2),.bubble-text :deep(h3) { margin: 10px 0 6px; font-weight: 600; }
+.bubble-text :deep(h1) { font-size: 17px; } .bubble-text :deep(h2) { font-size: 15px; } .bubble-text :deep(h3) { font-size: 14px; }
+.bubble-text :deep(ul),.bubble-text :deep(ol) { padding-left: 18px; margin: 6px 0; }
+.bubble-text :deep(li) { margin: 2px 0; }
+.bubble-text :deep(code) { background: rgba(79,142,247,0.12); border-radius: 4px; padding: 1px 5px; font-size: 12px; color: #7eb3ff; font-family: 'Fira Code', monospace; }
+.bubble-text :deep(pre) { background: #0d1117; border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 12px 14px; overflow-x: auto; margin: 8px 0; }
+.bubble-text :deep(pre code) { background: none; color: #7dd3fc; padding: 0; }
+.bubble-text :deep(blockquote) { border-left: 2px solid rgba(79,142,247,0.4); margin: 6px 0; padding: 4px 12px; color: rgba(255,255,255,0.4); }
+.bubble-text :deep(table) { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 13px; }
+.bubble-text :deep(th),.bubble-text :deep(td) { border: 1px solid rgba(255,255,255,0.08); padding: 6px 10px; }
+.bubble-text :deep(th) { background: rgba(255,255,255,0.04); font-weight: 600; }
+.bubble-text :deep(a) { color: #7eb3ff; text-decoration: none; }
+.bubble-text :deep(a:hover) { text-decoration: underline; }
 .bubble-text :deep(img) {
-  max-width: 100%;
-  border-radius: 6px;
-  margin: 8px 0;
+  max-width: 100%; border-radius: 10px; margin: 8px 0; display: block;
+  border: 1px solid rgba(255,255,255,0.08);
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  /* 轻压暗 + 微提对比，照片不失真 */
+  filter: brightness(0.92) contrast(1.04);
+  /* 白底图表与暗背景融合 */
+  mix-blend-mode: luminosity;
+  transition: filter 0.2s, transform 0.2s;
+  cursor: zoom-in;
+}
+.bubble-text :deep(img:hover) {
+  filter: brightness(1) contrast(1.06);
+  mix-blend-mode: normal;
+  transform: scale(1.01);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+}
+.bubble-text :deep(hr) { border: none; border-top: 1px solid rgba(255,255,255,0.08); margin: 10px 0; }
+.bubble.user .bubble-text :deep(code) { background: rgba(255,255,255,0.15); color: #fff; }
+.bubble.user .bubble-text :deep(a) { color: rgba(255,255,255,0.85); }
+
+/* Meta row (tools) */
+.meta-row {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.07);
+}
+.meta-label { font-size: 10px; color: rgba(255,255,255,0.3); text-transform: uppercase; letter-spacing: 0.5px; }
+.tool-chip {
+  font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 5px;
+  background: rgba(245,200,66,0.1); color: #f5c842;
+  text-transform: uppercase; letter-spacing: 0.3px;
+}
+
+/* Sources */
+.sources-section { margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.07); }
+.sources-toggle {
+  display: flex; align-items: center; gap: 6px;
+  background: none; border: none; cursor: pointer; padding: 0;
+  color: rgba(255,255,255,0.4); font-size: 12px; transition: color 0.2s;
+}
+.sources-toggle:hover { color: #7eb3ff; }
+.sources-count {
+  margin-left: 2px; font-size: 10px; padding: 1px 6px; border-radius: 4px;
+  background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.3);
+}
+.toggle-arrow { font-size: 11px; transition: transform 0.25s; }
+.toggle-arrow.open { transform: rotate(180deg); }
+.sources-list { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+.source-card {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 10px; border-radius: 8px;
+  background: rgba(79,142,247,0.06); border: 1px solid rgba(79,142,247,0.12);
+}
+.source-dot { width: 5px; height: 5px; border-radius: 50%; background: #7eb3ff; flex-shrink: 0; }
+.source-name { font-size: 12px; color: rgba(255,255,255,0.5); }
+
+/* Confidence arc */
+.confidence-row {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.07);
+}
+.conf-arc { width: 52px; height: 30px; }
+.conf-label { font-size: 11px; color: rgba(255,255,255,0.3); }
+
+/* Msg time */
+.msg-time { font-size: 10px; color: rgba(255,255,255,0.2); margin-top: 5px; padding: 0 4px; }
+
+/* Typing indicator */
+.typing-bubble {
+  display: flex; align-items: flex-end; gap: 4px;
+  padding: 14px 18px; min-width: 60px;
+}
+.wave-bar {
+  width: 3px; border-radius: 99px; background: #4f8ef7;
+  animation: wave 1.2s ease-in-out infinite;
+}
+.wave-bar:nth-child(1) { height: 8px; animation-delay: 0s; }
+.wave-bar:nth-child(2) { height: 14px; animation-delay: 0.15s; }
+.wave-bar:nth-child(3) { height: 8px; animation-delay: 0.3s; }
+@keyframes wave { 0%,100% { transform: scaleY(0.5); opacity: 0.4; } 50% { transform: scaleY(1); opacity: 1; } }
+
+/* ── Input area ── */
+.input-area {
+  display: flex; gap: 10px; padding: 14px 16px; align-items: flex-end;
+  background: rgba(255,255,255,0.02);
+  border-top: 1px solid rgba(255,255,255,0.06);
+  flex-shrink: 0;
+  transition: border-top-color 0.25s;
+}
+.input-area.focused { border-top-color: rgba(79,142,247,0.3); }
+.input-wrap { flex: 1; position: relative; }
+.input-wrap :deep(.el-textarea__inner) {
+  border-radius: 12px !important; resize: none !important;
+  padding-right: 48px !important;
+}
+.char-count {
+  position: absolute; bottom: 8px; right: 10px;
+  font-size: 10px; color: rgba(255,255,255,0.2); pointer-events: none;
+}
+.char-count.warn { color: #f06b6b; }
+
+/* Send button */
+.send-btn {
+  width: 44px; height: 44px; border-radius: 50%; border: none; cursor: pointer;
+  background: linear-gradient(135deg, #3b6fd4, #7c3aed);
+  color: #fff; display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; transition: all 0.25s cubic-bezier(0.4,0,0.2,1);
+  box-shadow: 0 2px 16px rgba(59,111,212,0.5), 0 0 0 1px rgba(255,255,255,0.08) inset;
+  position: relative; overflow: hidden;
+}
+.send-btn::before {
+  content: '';
+  position: absolute; inset: 0; border-radius: 50%;
+  background: linear-gradient(180deg, rgba(255,255,255,0.12), transparent);
+  pointer-events: none;
+}
+.send-btn:hover:not(.disabled) {
+  box-shadow: 0 6px 28px rgba(59,111,212,0.7), 0 0 0 3px rgba(79,142,247,0.25), 0 0 0 1px rgba(255,255,255,0.1) inset;
+  transform: translateY(-2px) scale(1.04);
+}
+.send-btn:active:not(.disabled) { transform: translateY(0) scale(0.97); }
+.send-btn.disabled { opacity: 0.3; cursor: not-allowed; transform: none; box-shadow: none; }
+.send-icon { display: flex; align-items: center; justify-content: center; }
+.send-icon svg { width: 15px; height: 15px; }
+.spin-ring {
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.25);
+  border-top-color: #fff;
+  animation: spin 0.7s linear infinite;
   display: block;
 }
+@keyframes spin { to { transform: rotate(360deg); } }
 
-.bubble-text :deep(hr) {
-  border: none;
-  border-top: 1px solid #e4e7ed;
-  margin: 10px 0;
-}
+/* ── Transitions ── */
+.fade-enter-active,.fade-leave-active { transition: opacity 0.3s; }
+.fade-enter-from,.fade-leave-to { opacity: 0; }
 
-/* 用户消息气泡内 markdown 颜色适配 */
-.msg-row.user .bubble-text :deep(code) {
-  background: rgba(255,255,255,0.2);
-  color: #fff;
-}
-.msg-row.user .bubble-text :deep(a) {
-  color: #fff;
-  text-decoration: underline;
-}
-.msg-row.user .bubble-text :deep(blockquote) {
-  border-left-color: rgba(255,255,255,0.5);
-  color: rgba(255,255,255,0.8);
-}
+.msg-enter-active { transition: all 0.35s cubic-bezier(0.4,0,0.2,1); }
+.msg-enter-from { opacity: 0; transform: translateY(16px); }
+.msg-leave-active { transition: all 0.25s cubic-bezier(0.4,0,1,1); }
+.msg-leave-to { opacity: 0; transform: translateY(-8px) scale(0.96); }
 
-.bubble-meta {
-  display: flex;
-  align-items: flex-start;
-  margin-top: 6px;
-  padding-top: 6px;
-  border-top: 1px solid rgba(0,0,0,0.06);
-}
+.expand-enter-active,.expand-leave-active { transition: all 0.3s cubic-bezier(0.4,0,0.2,1); overflow: hidden; }
+.expand-enter-from,.expand-leave-to { opacity: 0; max-height: 0; transform: translateY(-4px); }
+.expand-enter-to,.expand-leave-from { opacity: 1; max-height: 600px; transform: translateY(0); }
 
-.msg-time {
-  font-size: 11px;
-  color: #c0c4cc;
-  margin-top: 4px;
-  padding: 0 2px;
-}
-
-/* 打字动画 */
-.typing-bubble {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 12px 16px;
-}
-
-.dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: #c0c4cc;
-  animation: bounce 1.2s infinite;
-}
-
-.dot:nth-child(2) { animation-delay: 0.2s; }
-.dot:nth-child(3) { animation-delay: 0.4s; }
-
-@keyframes bounce {
-  0%, 80%, 100% { transform: translateY(0); }
-  40% { transform: translateY(-6px); }
-}
-
-/* 输入区 */
-.input-area {
-  display: flex;
-  gap: 10px;
-  padding: 14px 16px;
-  background: #fff;
-  border-top: 1px solid #e4e7ed;
-  flex-shrink: 0;
-  align-items: flex-end;
-}
-
-.input-area :deep(.el-textarea__inner) {
-  border-radius: 8px;
-  resize: none;
-}
-
-.send-btn {
-  height: 56px;
-  padding: 0 20px;
-  flex-shrink: 0;
-}
+.icon-swap-enter-active,.icon-swap-leave-active { transition: all 0.18s cubic-bezier(0.4,0,0.2,1); }
+.icon-swap-enter-from { opacity: 0; transform: scale(0.7) rotate(-90deg); }
+.icon-swap-leave-to { opacity: 0; transform: scale(0.7) rotate(90deg); }
 </style>

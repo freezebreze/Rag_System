@@ -382,11 +382,9 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.admin-panel { padding: 20px; max-width: 1200px; margin: 0 auto; }
+.admin-panel { padding: 0; max-width: 1200px; margin: 0 auto; }
 .admin-tabs { margin-top: 0; }
-.card-header { display: flex; justify-content: space-between; align-items: center; font-weight: 600; }
-.preset-fields { display: flex; flex-direction: column; gap: 12px; }
-.preset-row { display: flex; align-items: center; padding: 8px 12px; background: #f5f7fa; border-radius: 6px; }
-.tip { font-size: 12px; color: #909399; margin-top: 4px; line-height: 1.5; }
-:deep(.el-divider__text) { font-weight: 600; color: #409eff; }
+.preset-fields { display: flex; flex-direction: column; gap: 10px; }
+.preset-row { display: flex; align-items: center; padding: 10px 14px; border-radius: 8px; }
+:deep(.el-divider__text) { font-weight: 600; }
 </style>

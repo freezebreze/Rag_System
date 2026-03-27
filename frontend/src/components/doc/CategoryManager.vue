@@ -367,5 +367,5 @@ onUnmounted(stopPolling)
 </script>
 
 <style scoped>
-.card-header { display:flex; justify-content:space-between; align-items:center; font-weight:600; }
+.card-header { display:flex; justify-content:space-between; align-items:center; font-weight:600; color: #e2e8f0; }
 </style>
