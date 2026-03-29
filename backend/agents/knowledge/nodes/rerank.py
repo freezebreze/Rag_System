@@ -2,9 +2,8 @@
 """
 Rerank Node - 按分数排序并取 top-K（multi_doc 路径专用）
 
-single_doc 路径已在 ADB 层完成 rerank，不经过此节点。
-注意：此处是基于已有分数的排序，不是 cross-encoder rerank。
-     ADB 层的 rerank_factor 才是真正的 cross-encoder rerank。
+single_doc 路径经 Milvus RRF 融合后直接进入 generate，不经过此节点。
+注意：此处是基于已有 RRF 分数的排序，不是 cross-encoder rerank。
 """
 
 from typing import Dict, Any

@@ -1,96 +1,68 @@
 # -*- coding: utf-8 -*-
 """
 类目文件仓储
-表：knowledge_ns.knowledge_category_file
-记录文件与类目的关系及 OSS 存储信息
+表：knowledge_category_file
 """
-
 import logging
-import uuid
 from typing import Any, Dict, List, Optional
-
 from app.db.base_repository import BaseRepository
 
 logger = logging.getLogger(__name__)
 
-TABLE = "knowledge_category_file"
-
 
 class CategoryFileRepository(BaseRepository):
 
-    def __init__(self):
-        super().__init__()
-        self.table = TABLE
-
     def create(self, *, category_id: str, file_name: str, oss_key: str) -> Dict[str, Any]:
-        ref = self._table_ref(self.table)
-        file_id = str(uuid.uuid4())
-        sql = f"""
-        INSERT INTO {ref}(id, category_id, file_name, oss_key, created_at)
-        VALUES (
-            '{self._sql_escape(file_id)}',
-            '{self._sql_escape(category_id)}',
-            '{self._sql_escape(file_name)}',
-            '{self._sql_escape(oss_key)}',
-            NOW()
-        );
-        """
-        self._execute_sql(sql)
-        return self.get_by_category_and_filename(category_id, file_name)
+        rows = self._execute_returning(
+            "INSERT INTO knowledge_category_file(category_id, file_name, oss_key) VALUES (%s, %s, %s) RETURNING *",
+            (category_id, file_name, oss_key),
+        )
+        return self._normalize(rows[0]) if rows else {}
+
+    def get_by_id(self, file_id: str) -> Optional[Dict[str, Any]]:
+        rows = self._execute_select(
+            "SELECT * FROM knowledge_category_file WHERE id = %s LIMIT 1", (file_id,)
+        )
+        return self._normalize(rows[0]) if rows else None
 
     def get_by_category_and_filename(self, category_id: str, file_name: str) -> Optional[Dict[str, Any]]:
-        ref = self._table_ref(self.table)
-        sql = f"""
-        SELECT id, category_id, file_name, oss_key, created_at
-        FROM {ref}
-        WHERE category_id = '{self._sql_escape(category_id)}'
-          AND file_name = '{self._sql_escape(file_name)}'
-        LIMIT 1;
-        """
-        rows = self._execute_select(sql)
+        rows = self._execute_select(
+            "SELECT * FROM knowledge_category_file WHERE category_id = %s AND file_name = %s LIMIT 1",
+            (category_id, file_name),
+        )
         return self._normalize(rows[0]) if rows else None
 
     def list_by_category(self, category_id: str) -> List[Dict[str, Any]]:
-        ref = self._table_ref(self.table)
-        sql = f"""
-        SELECT id, category_id, file_name, oss_key, created_at
-        FROM {ref}
-        WHERE category_id = '{self._sql_escape(category_id)}'
-        ORDER BY created_at DESC;
-        """
-        return [self._normalize(r) for r in self._execute_select(sql)]
-
-    def delete(self, record_id: str):
-        ref = self._table_ref(self.table)
-        sql = f"DELETE FROM {ref} WHERE id = '{self._sql_escape(record_id)}';"
-        self._execute_sql(sql)
-
-    def delete_by_category_and_filename(self, category_id: str, file_name: str):
-        ref = self._table_ref(self.table)
-        sql = f"""
-        DELETE FROM {ref}
-        WHERE category_id = '{self._sql_escape(category_id)}'
-          AND file_name = '{self._sql_escape(file_name)}';
-        """
-        self._execute_sql(sql)
+        rows = self._execute_select(
+            "SELECT * FROM knowledge_category_file WHERE category_id = %s ORDER BY created_at DESC",
+            (category_id,),
+        )
+        return [self._normalize(r) for r in rows]
 
     def count_by_category(self, category_id: str) -> int:
-        ref = self._table_ref(self.table)
-        sql = f"""
-        SELECT COUNT(*) as cnt FROM {ref}
-        WHERE category_id = '{self._sql_escape(category_id)}';
-        """
-        rows = self._execute_select(sql)
-        return int(rows[0].get("cnt") or 0) if rows else 0
+        rows = self._execute_select(
+            "SELECT COUNT(*) AS cnt FROM knowledge_category_file WHERE category_id = %s",
+            (category_id,),
+        )
+        return int(rows[0]["cnt"]) if rows else 0
+
+    def delete(self, file_id: str):
+        self._execute_sql("DELETE FROM knowledge_category_file WHERE id = %s", (file_id,))
+
+    def delete_by_category_and_filename(self, category_id: str, file_name: str):
+        self._execute_sql(
+            "DELETE FROM knowledge_category_file WHERE category_id = %s AND file_name = %s",
+            (category_id, file_name),
+        )
 
     @staticmethod
     def _normalize(row: Dict[str, Any]) -> Dict[str, Any]:
         return {
-            "id": row.get("id"),
-            "category_id": row.get("category_id"),
-            "file_name": row.get("file_name"),
-            "oss_key": row.get("oss_key"),
-            "created_at": str(row.get("created_at")) if row.get("created_at") else None,
+            "id": str(row["id"]),
+            "category_id": str(row["category_id"]),
+            "file_name": row["file_name"],
+            "oss_key": row["oss_key"],
+            "created_at": str(row["created_at"]) if row.get("created_at") else None,
         }
 
 

@@ -20,7 +20,7 @@ def filter_chunks(state: KnowledgeAgentState) -> Dict[str, Any]:
     """
     按相关性分数过滤切片（multi_doc 路径）
 
-    single_doc 路径已在 ADB 层完成 rerank，不经过此节点。
+    single_doc 路径经 Milvus RRF 融合后直接进入 generate，不经过此节点。
     """
     merged_chunks = state["merged_chunks"]
     config = state["config"]

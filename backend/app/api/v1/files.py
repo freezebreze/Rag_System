@@ -10,33 +10,32 @@ router = APIRouter(prefix="/files", tags=["files"])
 
 
 class DeleteFileRequest(BaseModel):
-    job_id: str
-    collection: str
+    file_id: str
 
 
 class BatchDeleteFilesRequest(BaseModel):
-    job_ids: list[str]
-    collection: str
+    file_ids: list[str]
+    kb_name: str
 
 
 @router.get("")
 async def list_files(
+    kb_name: str = Query(..., description="知识库名称"),
     limit: int = Query(default=200, ge=1, le=2000),
-    collection: str = Query(default="", description="按知识库过滤，不传则返回全部"),
 ):
-    result = file_service.list_files(limit=limit, collection=collection or None)
+    result = file_service.list_files(kb_name=kb_name, limit=limit)
     return JSONResponse(content={"success": True, "data": result})
 
 
 @router.delete("")
 async def delete_file(req: DeleteFileRequest):
-    file_name = file_service.delete_file(req.job_id, req.collection)
+    file_name = file_service.delete_file(req.file_id)
     return JSONResponse(content={"success": True, "message": f"文件「{file_name}」已删除"})
 
 
 @router.post("/batch-delete")
 async def batch_delete_files(req: BatchDeleteFilesRequest):
-    result = file_service.batch_delete_files(req.job_ids, req.collection)
+    result = file_service.batch_delete_files(req.file_ids, req.kb_name)
     ok = len(result["deleted"])
     fail = len(result["failed"])
     return JSONResponse(content={

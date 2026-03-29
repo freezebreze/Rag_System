@@ -19,24 +19,27 @@ python-dotenv>=1.0.0
 # OpenAI 客户端
 openai
 
-# 数据库连接
+# 数据库 - PostgreSQL
 psycopg2-binary>=2.9.0
-pgvector>=0.2.0
 
-# 阿里云SDK - 使用兼容版本
-alibabacloud_gpdb20160503>=3.0.0
-alibabacloud-tea-util>=0.3.0
-# 修复依赖冲突
-cryptography>=45.0.7,<47
-pyopenssl>=25.3.0
+# 向量数据库 - Milvus
+pymilvus>=2.5.0
 
-# Token counting for validation
+# Token counting
 tiktoken>=0.5.0
 
+# 加密（namespace 密码加密保留）
+cryptography>=45.0.7,<47
+
+# 文件上传
 python-multipart
+
+# 阿里云服务
 dashscope
 oss2
 alibabacloud_oss_v2
+
+# 文档解析
 pageindex
 pymupdf
 python-docx

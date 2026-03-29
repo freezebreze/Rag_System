@@ -1,240 +1,183 @@
 # -*- coding: utf-8 -*-
 """
-切片存储仓储
-表：knowledge_ns.knowledge_chunk_store
-存储从 ChunkFileUrl（JSONL）下载的切片，支持编辑、LLM清洗和撤回（恢复原始内容）
+切片仓储
+表：knowledge_chunk（当前内容）+ knowledge_chunk_origin（原始内容，只写一次）
+chunk_id 格式："{job_id}_{chunk_index}"
 """
-
 import json
 import logging
 from typing import Any, Dict, List, Optional
-
 from app.db.base_repository import BaseRepository
 
 logger = logging.getLogger(__name__)
 
-CHUNK_TABLE = "knowledge_chunk_store"
-
 
 class ChunkRepository(BaseRepository):
 
-    def __init__(self):
-        super().__init__()
-        self.table = CHUNK_TABLE
-        self._ensure_table()
+    # ── 写入 ──────────────────────────────────────────────────────────────────
 
-    def _ensure_table(self):
-        ref = self._table_ref(self.table)
-        sql = f"""
-        CREATE TABLE IF NOT EXISTS {ref} (
-            chunk_id TEXT PRIMARY KEY,
-            job_id TEXT NOT NULL,
-            file_name TEXT,
-            chunk_index INTEGER,
-            original_content TEXT,
-            current_content TEXT,
-            metadata JSONB,
-            status TEXT DEFAULT 'original',
-            created_at TIMESTAMPTZ DEFAULT NOW(),
-            updated_at TIMESTAMPTZ DEFAULT NOW()
-        );
-        CREATE INDEX IF NOT EXISTS idx_chunk_store_job_id
-            ON {ref} (job_id);
+    def bulk_insert(self, job_id: str, file_name: str, chunks: List[Dict[str, Any]]):
         """
-        self._execute_sql(sql)
+        标准模式批量写入。
+        chunks 格式：[{"page_content": str, "metadata": dict}, ...]
+        chunk_id = "{job_id}_{index}"
+        """
+        if not chunks:
+            return
+        # 先清理该 job 旧数据
+        self._execute_sql("DELETE FROM knowledge_chunk WHERE job_id = %s", (job_id,))
+
+        chunk_params, origin_params = [], []
+        for idx, chunk in enumerate(chunks):
+            chunk_id = f"{job_id}_{idx}"
+            content = chunk.get("page_content") or chunk.get("content") or ""
+            metadata = json.dumps(chunk.get("metadata") or {}, ensure_ascii=False)
+            chunk_params.append((chunk_id, job_id, idx, content, metadata))
+            origin_params.append((chunk_id, content))
+
+        self._execute_many(
+            "INSERT INTO knowledge_chunk(id, job_id, chunk_index, content, metadata) VALUES (%s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+            chunk_params,
+        )
+        self._execute_many(
+            "INSERT INTO knowledge_chunk_origin(chunk_id, content) VALUES (%s, %s) ON CONFLICT (chunk_id) DO NOTHING",
+            origin_params,
+        )
 
     def bulk_insert_with_ids(self, job_id: str, file_name: str, chunks: List[Dict[str, Any]]):
         """
-        图文模式专用：直接使用 parse_pdf/parse_word 返回的 chunk_id，
-        chunk_index 也用 chunk_id 末尾的序号，保证与 image_records 一致。
+        图文模式专用：直接使用 parse_pdf/parse_word 返回的 chunk_id。
         chunks 格式：[{"chunk_id": str, "content": str, "metadata": dict}, ...]
         """
         if not chunks:
             return
-        ref = self._table_ref(self.table)
-        self._execute_sql(
-            f"DELETE FROM {ref} WHERE job_id = '{self._sql_escape(job_id)}';"
-        )
+        self._execute_sql("DELETE FROM knowledge_chunk WHERE job_id = %s", (job_id,))
+
+        chunk_params, origin_params = [], []
         for enumerate_idx, chunk in enumerate(chunks):
             chunk_id = chunk.get("chunk_id") or f"{job_id}_{enumerate_idx}"
-            # chunk_index 从 chunk_id 末尾取，保证和 image_records 里的 chunk_id 对应
             try:
                 chunk_index = int(chunk_id.rsplit("_", 1)[-1])
             except (ValueError, IndexError):
                 chunk_index = enumerate_idx
             content = chunk.get("content") or ""
-            metadata = chunk.get("metadata") or {}
-            meta_json = json.dumps(metadata, ensure_ascii=False)
-            sql = f"""
-            INSERT INTO {ref}(
-                chunk_id, job_id, file_name, chunk_index,
-                original_content, current_content, metadata, status, created_at, updated_at
-            ) VALUES (
-                '{self._sql_escape(chunk_id)}',
-                '{self._sql_escape(job_id)}',
-                '{self._sql_escape(file_name)}',
-                {chunk_index},
-                '{self._sql_escape(content)}',
-                '{self._sql_escape(content)}',
-                '{self._sql_escape(meta_json)}'::jsonb,
-                'original',
-                NOW(), NOW()
-            )
-            ON CONFLICT (chunk_id) DO UPDATE SET
-                original_content = EXCLUDED.original_content,
-                current_content = EXCLUDED.current_content,
-                metadata = EXCLUDED.metadata,
-                status = 'original',
-                updated_at = NOW();
-            """
-            self._execute_sql(sql)
+            metadata = json.dumps(chunk.get("metadata") or {}, ensure_ascii=False)
+            chunk_params.append((chunk_id, job_id, chunk_index, content, metadata))
+            origin_params.append((chunk_id, content))
 
-    def bulk_insert(self, job_id: str, file_name: str, chunks: List[Dict[str, Any]]):
-        """从 JSONL 解析后批量写入，original_content 和 current_content 初始相同"""
-        if not chunks:
-            return
-        ref = self._table_ref(self.table)
-        # 先删除该 job 的旧数据（重新获取时覆盖）
-        self._execute_sql(
-            f"DELETE FROM {ref} WHERE job_id = '{self._sql_escape(job_id)}';"
+        self._execute_many(
+            "INSERT INTO knowledge_chunk(id, job_id, chunk_index, content, metadata) VALUES (%s, %s, %s, %s, %s) ON CONFLICT (id) DO NOTHING",
+            chunk_params,
         )
-        for idx, chunk in enumerate(chunks):
-            chunk_id = f"{job_id}_{idx}"
-            content = chunk.get("page_content") or chunk.get("content") or ""
-            metadata = chunk.get("metadata") or {}
-            meta_json = json.dumps(metadata, ensure_ascii=False)
-            sql = f"""
-            INSERT INTO {ref}(
-                chunk_id, job_id, file_name, chunk_index,
-                original_content, current_content, metadata, status, created_at, updated_at
-            ) VALUES (
-                '{self._sql_escape(chunk_id)}',
-                '{self._sql_escape(job_id)}',
-                '{self._sql_escape(file_name)}',
-                {idx},
-                '{self._sql_escape(content)}',
-                '{self._sql_escape(content)}',
-                '{self._sql_escape(meta_json)}'::jsonb,
-                'original',
-                NOW(), NOW()
-            )
-            ON CONFLICT (chunk_id) DO UPDATE SET
-                original_content = EXCLUDED.original_content,
-                current_content = EXCLUDED.current_content,
-                metadata = EXCLUDED.metadata,
-                status = 'original',
-                updated_at = NOW();
-            """
-            self._execute_sql(sql)
+        self._execute_many(
+            "INSERT INTO knowledge_chunk_origin(chunk_id, content) VALUES (%s, %s) ON CONFLICT (chunk_id) DO NOTHING",
+            origin_params,
+        )
+
+    # ── 查询 ──────────────────────────────────────────────────────────────────
 
     def get_by_job(self, job_id: str) -> List[Dict[str, Any]]:
-        ref = self._table_ref(self.table)
-        sql = f"""
-        SELECT chunk_id, job_id, file_name, chunk_index,
-               original_content, current_content, metadata::text AS metadata, status, updated_at
-        FROM {ref}
-        WHERE job_id = '{self._sql_escape(job_id)}'
-        ORDER BY chunk_index ASC;
-        """
-        rows = self._execute_select(sql)
+        rows = self._execute_select(
+            "SELECT * FROM knowledge_chunk WHERE job_id = %s ORDER BY chunk_index ASC",
+            (job_id,),
+        )
         return [self._normalize(r) for r in rows]
 
     def get_by_job_and_index(self, job_id: str, chunk_index: int) -> Optional[Dict[str, Any]]:
-        ref = self._table_ref(self.table)
-        sql = f"""
-        SELECT chunk_id, job_id, file_name, chunk_index,
-               original_content, current_content, metadata::text AS metadata, status, updated_at
-        FROM {ref}
-        WHERE job_id = '{self._sql_escape(job_id)}' AND chunk_index = {int(chunk_index)}
-        LIMIT 1;
-        """
-        rows = self._execute_select(sql)
+        rows = self._execute_select(
+            "SELECT * FROM knowledge_chunk WHERE job_id = %s AND chunk_index = %s LIMIT 1",
+            (job_id, chunk_index),
+        )
         return self._normalize(rows[0]) if rows else None
 
-    def update_content_by_index(self, job_id: str, chunk_index: int, content: str, status: str = "edited"):
-        ref = self._table_ref(self.table)
-        sql = f"""
-        UPDATE {ref}
-        SET current_content = '{self._sql_escape(content)}',
-            status = '{self._sql_escape(status)}',
-            updated_at = NOW()
-        WHERE job_id = '{self._sql_escape(job_id)}' AND chunk_index = {int(chunk_index)};
-        """
-        self._execute_sql(sql)
+    def get_by_id(self, chunk_id: str) -> Optional[Dict[str, Any]]:
+        rows = self._execute_select(
+            "SELECT * FROM knowledge_chunk WHERE id = %s LIMIT 1", (chunk_id,)
+        )
+        return self._normalize(rows[0]) if rows else None
 
-    def revert_chunk_by_index(self, job_id: str, chunk_index: int):
-        """撤回指定 chunk_index 的切片到原始内容"""
-        ref = self._table_ref(self.table)
-        sql = f"""
-        UPDATE {ref}
-        SET current_content = original_content,
-            status = 'original',
-            updated_at = NOW()
-        WHERE job_id = '{self._sql_escape(job_id)}' AND chunk_index = {int(chunk_index)};
-        """
-        self._execute_sql(sql)
-
-    def revert_chunk(self, chunk_id: str):
-        """撤回单个切片到原始内容"""
-        ref = self._table_ref(self.table)
-        sql = f"""
-        UPDATE {ref}
-        SET current_content = original_content,
-            status = 'original',
-            updated_at = NOW()
-        WHERE chunk_id = '{self._sql_escape(chunk_id)}';
-        """
-        self._execute_sql(sql)
-
-    def revert_job(self, job_id: str):
-        """撤回整个 job 的所有切片到原始内容"""
-        ref = self._table_ref(self.table)
-        sql = f"""
-        UPDATE {ref}
-        SET current_content = original_content,
-            status = 'original',
-            updated_at = NOW()
-        WHERE job_id = '{self._sql_escape(job_id)}';
-        """
-        self._execute_sql(sql)
-
-    def revert_all(self):
-        """撤回所有切片到原始内容"""
-        ref = self._table_ref(self.table)
-        sql = f"""
-        UPDATE {ref}
-        SET current_content = original_content,
-            status = 'original',
-            updated_at = NOW();
-        """
-        self._execute_sql(sql)
-
-    def delete_chunk(self, chunk_id: str):
-        ref = self._table_ref(self.table)
-        sql = f"DELETE FROM {ref} WHERE chunk_id = '{self._sql_escape(chunk_id)}';"
-        self._execute_sql(sql)
-
-    def delete_by_job(self, job_id: str):
-        ref = self._table_ref(self.table)
-        sql = f"DELETE FROM {ref} WHERE job_id = '{self._sql_escape(job_id)}';"
-        self._execute_sql(sql)
-
-    def list_all_job_ids(self) -> list:
-        """返回 chunk_store 中所有不重复的 job_id"""
-        ref = self._table_ref(self.table)
-        rows = self._execute_select(f"SELECT DISTINCT job_id FROM {ref};")
-        return [r.get("job_id") for r in rows if r.get("job_id")]
+    def list_all_job_ids(self) -> List[str]:
+        rows = self._execute_select("SELECT DISTINCT job_id FROM knowledge_chunk")
+        return [str(r["job_id"]) for r in rows if r.get("job_id")]
 
     def has_chunks(self, job_id: str) -> bool:
-        ref = self._table_ref(self.table)
-        sql = f"SELECT COUNT(*) AS cnt FROM {ref} WHERE job_id = '{self._sql_escape(job_id)}';"
-        rows = self._execute_select(sql)
-        if not rows:
-            return False
-        try:
-            return int(rows[0].get("cnt", 0)) > 0
-        except Exception:
-            return False
+        rows = self._execute_select(
+            "SELECT COUNT(*) AS cnt FROM knowledge_chunk WHERE job_id = %s", (job_id,)
+        )
+        return int(rows[0]["cnt"]) > 0 if rows else False
+
+    # ── 更新 ──────────────────────────────────────────────────────────────────
+
+    def update_content_by_index(self, job_id: str, chunk_index: int, content: str, status: str = "edited"):
+        is_modified = status != "original"
+        self._execute_sql(
+            "UPDATE knowledge_chunk SET content = %s, is_modified = %s, updated_at = NOW() WHERE job_id = %s AND chunk_index = %s",
+            (content, is_modified, job_id, chunk_index),
+        )
+
+    def update_content(self, chunk_id: str, content: str, status: str = "edited"):
+        is_modified = status != "original"
+        self._execute_sql(
+            "UPDATE knowledge_chunk SET content = %s, is_modified = %s, updated_at = NOW() WHERE id = %s",
+            (content, is_modified, chunk_id),
+        )
+
+    # ── 撤回（从 origin 表恢复）──────────────────────────────────────────────
+
+    def revert_chunk_by_index(self, job_id: str, chunk_index: int):
+        self._execute_sql(
+            """
+            UPDATE knowledge_chunk c
+            SET content = o.content, is_modified = FALSE, updated_at = NOW()
+            FROM knowledge_chunk_origin o
+            WHERE c.id = o.chunk_id
+              AND c.job_id = %s AND c.chunk_index = %s
+            """,
+            (job_id, chunk_index),
+        )
+
+    def revert_chunk(self, chunk_id: str):
+        self._execute_sql(
+            """
+            UPDATE knowledge_chunk c
+            SET content = o.content, is_modified = FALSE, updated_at = NOW()
+            FROM knowledge_chunk_origin o
+            WHERE c.id = o.chunk_id AND c.id = %s
+            """,
+            (chunk_id,),
+        )
+
+    def revert_job(self, job_id: str):
+        self._execute_sql(
+            """
+            UPDATE knowledge_chunk c
+            SET content = o.content, is_modified = FALSE, updated_at = NOW()
+            FROM knowledge_chunk_origin o
+            WHERE c.id = o.chunk_id AND c.job_id = %s
+            """,
+            (job_id,),
+        )
+
+    def revert_all(self):
+        self._execute_sql(
+            """
+            UPDATE knowledge_chunk c
+            SET content = o.content, is_modified = FALSE, updated_at = NOW()
+            FROM knowledge_chunk_origin o
+            WHERE c.id = o.chunk_id
+            """
+        )
+
+    # ── 删除 ──────────────────────────────────────────────────────────────────
+
+    def delete_by_job(self, job_id: str):
+        # ON DELETE CASCADE 会自动删 origin 和 image
+        self._execute_sql("DELETE FROM knowledge_chunk WHERE job_id = %s", (job_id,))
+
+    def delete_chunk(self, chunk_id: str):
+        self._execute_sql("DELETE FROM knowledge_chunk WHERE id = %s", (chunk_id,))
+
+    # ── 序列化 ────────────────────────────────────────────────────────────────
 
     @staticmethod
     def _normalize(row: Dict[str, Any]) -> Dict[str, Any]:
@@ -245,16 +188,20 @@ class ChunkRepository(BaseRepository):
                 metadata = json.loads(meta_raw)
             except Exception:
                 metadata = {}
+        elif isinstance(meta_raw, dict):
+            metadata = meta_raw
         return {
-            "chunk_id": row.get("chunk_id"),
-            "job_id": row.get("job_id"),
-            "file_name": row.get("file_name"),
+            "chunk_id": row["id"],
+            "job_id": str(row["job_id"]),
             "chunk_index": row.get("chunk_index"),
-            "original_content": row.get("original_content"),
-            "current_content": row.get("current_content"),
+            # 兼容旧接口：current_content / original_content
+            "current_content": row.get("content", ""),
+            "original_content": row.get("content", ""),  # 查询时不 JOIN origin，保持接口兼容
+            "content": row.get("content", ""),
+            "is_modified": bool(row.get("is_modified", False)),
+            "status": "edited" if row.get("is_modified") else "original",
             "metadata": metadata,
-            "status": row.get("status"),
-            "updated_at": str(row.get("updated_at")) if row.get("updated_at") else None,
+            "updated_at": str(row["updated_at"]) if row.get("updated_at") else None,
         }
 
 

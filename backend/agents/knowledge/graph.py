@@ -13,12 +13,12 @@ Workflow:
   determine_retrieval_strategy  - 判断 keyword / hybrid
     ↓
   ┌─────────────────────────────────────────┐
-  │ single_doc_retrieve                     │  top_k=20, ADB rerank_factor=2.0
+  │ single_doc_retrieve                     │  top_k=20, Milvus RRF hybrid
   │   → relevance_filter (LLM 二次过滤)     │
   │   → generate_answer                     │
   └─────────────────────────────────────────┘
   ┌─────────────────────────────────────────┐
-  │ multi_doc_retrieve                      │  top_k=50, 不在 ADB 层 rerank
+  │ multi_doc_retrieve                      │  top_k=50, Milvus RRF hybrid
   │   → filter_chunks (score 阈值过滤)      │
   │   → rerank_chunks  (按分数排序取 top-K) │
   │   → relevance_filter (LLM 二次过滤)     │
@@ -108,7 +108,7 @@ def create_knowledge_agent():
         }
     )
 
-    # single_doc 路径：ADB 已 rerank → 直接 generate
+    # single_doc 路径：Milvus RRF hybrid → 直接 generate
     builder.add_edge("single_doc_retrieve", "generate_answer")
 
     # multi_doc 路径：score 过滤 → rerank → generate
@@ -131,7 +131,7 @@ def create_knowledge_agent():
     graph = builder.compile()
 
     print("[Graph] Knowledge Agent created")
-    print("[Graph] single_doc: rewrite→classify→strategy→single_retrieve(ADB rerank)→relevance_filter→generate")
+    print("[Graph] single_doc: rewrite→classify→strategy→single_retrieve(Milvus hybrid)→relevance_filter→generate")
     print("[Graph] multi_doc:  rewrite→classify→strategy→multi_retrieve→filter→rerank→relevance_filter→generate")
 
     return graph

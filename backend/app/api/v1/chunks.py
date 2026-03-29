@@ -4,21 +4,20 @@ from typing import Optional
 from fastapi import APIRouter, Form, UploadFile, File
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from pydantic import BaseModel
 
 from app.services import chunk_service
 
 router = APIRouter(prefix="/chunks", tags=["chunks"])
 
 
-# ─── 查询 ─────────────────────────────────────────────────────────────────────
+# ── 查询 ──────────────────────────────────────────────────────────────────────
 
 @router.get("/job/{job_id}")
 async def get_chunks_by_job(job_id: str):
     return JSONResponse(content={"success": True, "data": chunk_service.get_chunks_by_job(job_id)})
 
 
-# ─── 单切片操作 ───────────────────────────────────────────────────────────────
+# ── 单切片操作 ────────────────────────────────────────────────────────────────
 
 class EditChunkBody(BaseModel):
     content: str
@@ -42,7 +41,7 @@ async def revert_single_chunk(job_id: str, chunk_index: int):
     return JSONResponse(content={"success": True, "message": "已恢复原始内容"})
 
 
-# ─── 批量操作（按 job） ────────────────────────────────────────────────────────
+# ── 批量操作（按 job）────────────────────────────────────────────────────────
 
 class BatchCleanBody(BaseModel):
     instruction: Optional[str] = None
@@ -64,7 +63,7 @@ async def revert_job_chunks(job_id: str):
     return JSONResponse(content={"success": True, "message": "已恢复该 job 所有切片到原始内容"})
 
 
-# ─── 全局批量操作 ─────────────────────────────────────────────────────────────
+# ── 全局批量操作 ──────────────────────────────────────────────────────────────
 
 @router.post("/clean-all")
 async def clean_all_chunks(body: BatchCleanBody = BatchCleanBody()):
@@ -82,11 +81,11 @@ async def revert_all_chunks():
     return JSONResponse(content={"success": True, "message": "已恢复所有切片到原始内容"})
 
 
-# ─── 向量库上传 ───────────────────────────────────────────────────────────────
+# ── 向量库上传 ────────────────────────────────────────────────────────────────
 
 @router.post("/job/{job_id}/upsert")
 async def upsert_job_chunks(job_id: str):
-    result = chunk_service.upsert_job_chunks(job_id)
+    result = await chunk_service.upsert_job_chunks(job_id)
     return JSONResponse(content={"success": True, "message": "上传成功", "data": result})
 
 
@@ -96,7 +95,7 @@ class BatchUpsertRequest(BaseModel):
 
 @router.post("/batch-upsert")
 async def batch_upsert_jobs(body: BatchUpsertRequest):
-    result = chunk_service.batch_upsert_jobs(body.job_ids)
+    result = await chunk_service.batch_upsert_jobs(body.job_ids)
     ok = len(result["succeeded"])
     fail = len(result["failed"])
     return JSONResponse(content={
@@ -106,7 +105,7 @@ async def batch_upsert_jobs(body: BatchUpsertRequest):
     })
 
 
-# ─── 图片管理 ─────────────────────────────────────────────────────────────────
+# ── 图片管理 ──────────────────────────────────────────────────────────────────
 
 @router.get("/job/{job_id}/chunk/{chunk_index}/images")
 async def get_chunk_images(job_id: str, chunk_index: int):

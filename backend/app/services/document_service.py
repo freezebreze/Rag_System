@@ -3,32 +3,30 @@
 文档管理业务逻辑
 """
 import asyncio
-import json
 import logging
 import re
 from typing import Optional
 
+from fastapi import BackgroundTasks
+
 from app.core.exceptions import NotFoundError, ValidationError, ExternalServiceError
-from app.services.adb_document_service import ADBDocumentService, get_adb_document_service
 from app.services.oss_service import get_oss_service
 from app.db import (
+    get_kb_repository,
     get_category_repository,
     get_category_file_repository,
-    get_document_job_repository,
-    get_collection_config_repository,
+    get_file_repository,
+    get_job_repository,
 )
-from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 ALLOWED_EXT = {".pdf", ".doc", ".docx", ".txt", ".md", ".ppt", ".pptx"}
-
-# 文件名安全字符：字母、数字、中文、下划线、连字符、点（含扩展名整体校验）
-# 禁止空格及 OSS 路径敏感字符：/ \ ? # * < > | : " % & + = @ ! ( ) [ ] { } , ; ^ ~ ` '
+# 允许：字母、数字、中文、下划线、连字符、点、空格
 _SAFE_FILENAME_RE = re.compile(r'^[\w\u4e00-\u9fff\-\. ]+$')
 
 
-# ─── 工具函数 ─────────────────────────────────────────────────────────────────
+# ── 工具函数 ──────────────────────────────────────────────────────────────────
 
 def validate_file(filename: str, size: int) -> None:
     ext = "." + filename.rsplit(".", 1)[-1].lower()
@@ -42,170 +40,85 @@ def validate_file(filename: str, size: int) -> None:
         )
 
 
-
-def resolve_metadata(collection: str, file_name: str, base_meta: dict) -> dict:
-    try:
-        config = get_collection_config_repository().get_by_collection(settings.adb_namespace, collection)
-        if not config:
-            return base_meta
-        for field in config.get("metadata_fields") or []:
-            key = field.get("key")
-            if key and field.get("auto_inject") == "filename_prefix":
-                base_meta[key] = file_name.rsplit(".", 1)[0] if "." in file_name else file_name
-    except Exception as e:
-        logger.warning("metadata 注入失败，跳过", extra={"error": str(e)})
-    return base_meta
+def _get_kb_or_raise(kb_name: str) -> dict:
+    kb = get_kb_repository().get_by_name(kb_name)
+    if not kb:
+        raise NotFoundError(f"知识库「{kb_name}」不存在")
+    return kb
 
 
-# ─── 单文件上传切分 ───────────────────────────────────────────────────────────
+# ── 单文件上传到知识库 ────────────────────────────────────────────────────────
 
 async def upload_document(
     file_name: str,
     file_content: bytes,
-    metadata_raw: Optional[str],
-    chunk_size: int = 800,
-    chunk_overlap: int = 100,
-    zh_title_enhance: bool = True,
-    vl_enhance: bool = False,
-    image_dpi: int = 150,
-) -> dict:
-    """单文件上传切分入口：自动判断图文/标准模式"""
-    validate_file(file_name, len(file_content))
-
-    collection = settings.adb_collection
-    col_config = get_collection_config_repository().get_by_collection(settings.adb_namespace, collection)
-    is_image_mode = bool(col_config and col_config.get("image_mode"))
-    ext = file_name.lower().rsplit(".", 1)[-1]
-
-    if is_image_mode:
-        if ext not in ("pdf", "docx"):
-            raise ValidationError("图文模式知识库仅支持 PDF / DOCX 格式")
-        return await start_chunking_single(
-            file_name=file_name,
-            file_content=file_content,
-            collection=collection,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            image_dpi=image_dpi,
-        )
-
-    # 标准模式
-    metadata_dict: dict = {}
-    if metadata_raw and metadata_raw.strip() and metadata_raw.strip().lower() not in ("undefined", "null", "none"):
-        try:
-            metadata_dict = json.loads(metadata_raw)
-        except json.JSONDecodeError as e:
-            raise ValidationError(f"元数据格式错误: {e}")
-    metadata_dict["filename"] = file_name
-    metadata_dict = resolve_metadata(collection, file_name, metadata_dict)
-
-    try:
-        doc_service = ADBDocumentService(namespace=settings.adb_namespace, collection=collection)
-        job_id = await asyncio.to_thread(
-            doc_service.upload_document_async,
-            file_name, file_content, metadata_dict,
-            chunk_size, chunk_overlap,
-            zh_title_enhance, vl_enhance, True,
-            settings.adb_document_loader_pdf if file_name.lower().endswith(".pdf") else None,
-            settings.adb_text_splitter,
-        )
-    except Exception as e:
-        raise ExternalServiceError(f"ADB 上传失败: {e}") from e
-
-    get_document_job_repository().upsert(
-        file_name=file_name, job_id=job_id, category_id=None, collection=collection
-    )
-    return {"job_id": job_id, "file_name": file_name}
-
-
-
-async def start_chunking_single(
-    file_name: str,
-    file_content: bytes,
-    collection: str,
+    kb_name: str,
+    background_tasks: BackgroundTasks,
     chunk_size: int = 500,
     chunk_overlap: int = 50,
     image_dpi: int = 150,
 ) -> dict:
     """
-    图文模式单文件切分：本地 parse_pdf/parse_word → 写库。
-    仅支持图文模式 collection，仅支持 PDF / DOCX。
+    单文件上传入口：
+    1. 校验文件
+    2. 上传 OSS（kb/{kb_name}/{file_name}）
+    3. 写 knowledge_file + knowledge_job(pending)
+    4. 触发后台任务（切分 + 向量化）
+    5. 立即返回 job_id
     """
     validate_file(file_name, len(file_content))
+    kb = _get_kb_or_raise(kb_name)
 
-    ext = file_name.lower().rsplit(".", 1)[-1]
-    if ext not in ("pdf", "docx"):
-        raise ValidationError("图文模式仅支持 PDF / DOCX 格式")
+    oss_key = f"kb/{kb_name}/{file_name}"
+    try:
+        get_oss_service().upload_bytes(oss_key, file_content)
+    except Exception as e:
+        raise ExternalServiceError(f"OSS 上传失败: {e}") from e
 
-    col_config = get_collection_config_repository().get_by_collection(settings.adb_namespace, collection)
-    if not col_config or not col_config.get("image_mode"):
-        raise ValidationError(f"知识库「{collection}」不是图文模式，请使用标准上传接口")
+    file_repo = get_file_repository()
+    existing = file_repo.get_by_kb_and_oss_key(kb["id"], oss_key)
+    if existing:
+        file_repo.delete(existing["id"])
 
-    from app.services.doc_image_parser import parse_pdf, parse_word
-    from app.db import get_chunk_image_repository, get_job_repository
-    import uuid as _uuid
-
-    job_id = str(_uuid.uuid4())
-
-    if ext == "pdf":
-        chunks, image_records = await asyncio.to_thread(
-            parse_pdf,
-            file_content=file_content,
-            job_id=job_id,
-            collection=collection,
-            file_name=file_name,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            image_dpi=image_dpi,
-        )
-    else:
-        chunks, image_records = await asyncio.to_thread(
-            parse_word,
-            file_content=file_content,
-            job_id=job_id,
-            collection=collection,
-            file_name=file_name,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-        )
-
-    await asyncio.to_thread(
-        get_chunk_repository().bulk_insert_with_ids,
-        job_id, file_name, chunks,
-    )
-    if image_records:
-        await asyncio.to_thread(get_chunk_image_repository().bulk_insert, image_records)
-
-    get_document_job_repository().upsert(
-        file_name=file_name, job_id=job_id, category_id=None, collection=collection
-    )
-    get_job_repository().upsert_job(
-        job_id=job_id,
+    file_record = file_repo.create(
+        kb_id=kb["id"],
         file_name=file_name,
-        namespace=settings.adb_namespace,
-        collection=collection,
-        splitting_method="image_mode",
-        dry_run=False,
-        status="Success",
-        message="图文模式本地切分完成",
+        oss_key=oss_key,
+        file_size=len(file_content),
+        mime_type=_guess_mime(file_name),
+        status="pending",
     )
-    logger.info(f"[图文切分-单文件] {file_name} 完成: {len(chunks)} 切片, {len(image_records)} 图片")
-    return {"job_id": job_id, "file_name": file_name}
+
+    job = get_job_repository().create(file_id=file_record["id"], kb_id=kb["id"])
+    job_id = job["id"]
+
+    background_tasks.add_task(
+        _run_pipeline,
+        job_id=job_id,
+        file_id=file_record["id"],
+        kb_id=kb["id"],
+        kb_name=kb_name,
+        file_name=file_name,
+        oss_key=oss_key,
+        image_mode=kb["image_mode"],
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        image_dpi=image_dpi,
+    )
+
+    logger.info(f"[upload] {file_name} → job_id={job_id}")
+    return {"job_id": job_id, "file_id": file_record["id"], "file_name": file_name}
 
 
-# ─── 类目文件上传到 OSS ───────────────────────────────────────────────────────
+# ── 类目文件上传到 OSS ────────────────────────────────────────────────────────
 
 def upload_to_category(file_name: str, file_content: bytes, category_id: str) -> dict:
     validate_file(file_name, len(file_content))
-
     category = get_category_repository().get(category_id)
     if not category:
         raise NotFoundError("类目不存在")
 
-    try:
-        oss_key = get_oss_service().upload_file(f"category/{category['name']}", file_name, file_content)
-    except Exception as e:
-        raise ExternalServiceError(f"OSS 上传失败: {e}") from e
+    oss_key = get_oss_service().upload_file(f"category/{category['name']}", file_name, file_content)
 
     cat_file_repo = get_category_file_repository()
     existing = cat_file_repo.get_by_category_and_filename(category_id, file_name)
@@ -215,32 +128,21 @@ def upload_to_category(file_name: str, file_content: bytes, category_id: str) ->
     return cat_file_repo.create(category_id=category_id, file_name=file_name, oss_key=oss_key)
 
 
-# ─── 类目文件批量上传到 OSS ──────────────────────────────────────────────────
-
-async def batch_upload_to_category(
-    files: list[tuple[str, bytes]],
-    category_id: str,
-) -> dict:
-    """
-    并发上传多个文件到 OSS 类目目录。
-    files: [(file_name, file_content), ...]
-    返回: {succeeded: [...], failed: [...]}
-    """
+async def batch_upload_to_category(files: list, category_id: str) -> dict:
     category = get_category_repository().get(category_id)
     if not category:
         raise NotFoundError("类目不存在")
 
     async def _upload_one(file_name: str, file_content: bytes) -> dict:
-        # 去除路径前缀，只保留文件名（防止文件夹上传时携带路径）
         file_name = file_name.replace("\\", "/").split("/")[-1]
         try:
             validate_file(file_name, len(file_content))
         except ValidationError as e:
             return {"file_name": file_name, "success": False, "error": str(e)}
-
         try:
             oss_key = await asyncio.to_thread(
-                get_oss_service().upload_file, f"category/{category['name']}", file_name, file_content
+                get_oss_service().upload_file,
+                f"category/{category['name']}", file_name, file_content,
             )
         except Exception as e:
             return {"file_name": file_name, "success": False, "error": f"OSS 上传失败: {e}"}
@@ -257,244 +159,126 @@ async def batch_upload_to_category(
     failed = [{"file_name": r["file_name"], "error": r["error"]} for r in results if not r["success"]]
     return {"succeeded": succeeded, "failed": failed, "total": len(files)}
 
+
+# ── 类目文件批量切分到知识库 ──────────────────────────────────────────────────
+
 async def start_chunking(
     category_id: str,
-    collection: str,
-    chunk_size: int = 800,
-    chunk_overlap: int = 100,
-    zh_title_enhance: bool = True,
-    vl_enhance: bool = False,
-    text_splitter_name: Optional[str] = None,
+    kb_name: str,
+    background_tasks: BackgroundTasks,
+    chunk_size: int = 500,
+    chunk_overlap: int = 50,
     image_dpi: int = 150,
 ) -> dict:
+    """将类目下所有文件提交到知识库切分流水线，每个文件后台异步处理"""
     category = get_category_repository().get(category_id)
     if not category:
         raise NotFoundError("类目不存在")
 
-    col_config = get_collection_config_repository().get_by_collection(settings.adb_namespace, collection)
-    is_image_mode = bool(col_config and col_config.get("image_mode"))
-
-    category_name = category["name"]
-    cat_file_repo = get_category_file_repository()
-    doc_job_repo = get_document_job_repository()
-    oss_service = get_oss_service()
-
-    all_files = cat_file_repo.list_by_category(category_id)
-    logger.info(f"[start_chunking] category_id={category_id} collection={collection} 查到 {len(all_files)} 个文件")
+    kb = _get_kb_or_raise(kb_name)
+    all_files = get_category_file_repository().list_by_category(category_id)
     if not all_files:
-        return {"submitted": 0, "skipped": [], "files": [], "errors": []}
+        return {"submitted": 0, "files": [], "errors": []}
 
-    submitted, skipped, errors = [], [], []
-
-    if is_image_mode:
-        from app.services.image_mode_service import process_image_mode_files
-        result = await process_image_mode_files(
-            all_files=all_files,
-            category_id=category_id,
-            category_name=category_name,
-            collection=collection,
-            chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap,
-            image_dpi=image_dpi,
-        )
-        submitted = result["submitted"]
-        errors = result["errors"]
-    else:
-        doc_service = ADBDocumentService(namespace=settings.adb_namespace, collection=collection)
-        for f in all_files:
-            file_name = f["file_name"]
-            existing_job = doc_job_repo.get_by_filename_category_collection(file_name, category_id, collection)
-            if existing_job and existing_job.get("job_id"):
-                try:
-                    detail = await asyncio.to_thread(doc_service.get_upload_job_detail, existing_job["job_id"])
-                    if (detail.get("status") or "").lower() in ("running", "start"):
-                        skipped.append(file_name)
-                        continue
-                except Exception:
-                    pass
-
-            try:
-                url = await asyncio.to_thread(oss_service.get_presigned_url_by_category, f"category/{category_name}", file_name)
-                metadata = resolve_metadata(
-                    collection, file_name,
-                    {"filename": file_name, "category": category_name},
-                )
-                job_id = await asyncio.to_thread(
-                    doc_service.upload_document_from_url,
-                    file_name, url, metadata,
-                    chunk_size, chunk_overlap,
-                    zh_title_enhance, vl_enhance, True,
-                    settings.adb_document_loader_pdf if file_name.lower().endswith(".pdf") else None,
-                    text_splitter_name or settings.adb_text_splitter,
-                )
-                doc_job_repo.upsert(file_name=file_name, job_id=job_id, category_id=category_id, collection=collection)
-                submitted.append({"file_name": file_name, "job_id": job_id})
-            except Exception as e:
-                logger.error("提交切分失败", extra={"file_name": file_name, "error": str(e)})
-                errors.append({"file_name": file_name, "error": str(e)})
-
-    return {"submitted": len(submitted), "skipped": skipped, "files": submitted, "errors": errors}
-
-
-async def start_chunking_direct(
-    category_id: str,
-    collection: str,
-    chunk_size: int = 800,
-    chunk_overlap: int = 100,
-    zh_title_enhance: bool = True,
-    vl_enhance: bool = False,
-    text_splitter_name: Optional[str] = None,
-) -> dict:
-    """
-    直接切分并入库（dry_run=False）：ADB 自动切分、向量化、写入向量库，一步到位。
-    任务完成后后台自动 fetch-chunks 写入本地 knowledge_chunk_store，标记 vectorized=True。
-    不支持 image_mode collection。
-    """
-    category = get_category_repository().get(category_id)
-    if not category:
-        raise NotFoundError("类目不存在")
-
-    col_config = get_collection_config_repository().get_by_collection(settings.adb_namespace, collection)
-    if col_config and col_config.get("image_mode"):
-        raise ValidationError("图文模式 collection 不支持直接入库，请使用普通切分流程")
-
-    category_name = category["name"]
-    cat_file_repo = get_category_file_repository()
-    doc_job_repo = get_document_job_repository()
-    oss_service = get_oss_service()
-
-    all_files = cat_file_repo.list_by_category(category_id)
-    if not all_files:
-        return {"submitted": 0, "skipped": [], "files": [], "errors": []}
-
-    submitted, skipped, errors = [], [], []
-    doc_service = ADBDocumentService(namespace=settings.adb_namespace, collection=collection)
+    file_repo = get_file_repository()
+    job_repo = get_job_repository()
+    submitted, errors = [], []
 
     for f in all_files:
         file_name = f["file_name"]
-        existing_job = doc_job_repo.get_by_filename_category_collection(file_name, category_id, collection)
-        if existing_job and existing_job.get("job_id"):
-            try:
-                detail = await asyncio.to_thread(doc_service.get_upload_job_detail, existing_job["job_id"])
-                if (detail.get("status") or "").lower() in ("running", "start"):
-                    skipped.append(file_name)
-                    continue
-            except Exception:
-                pass
-
+        oss_key = f["oss_key"]
         try:
-            url = await asyncio.to_thread(oss_service.get_presigned_url_by_category, f"category/{category_name}", file_name)
-            metadata = resolve_metadata(
-                collection, file_name,
-                {"filename": file_name, "category": category_name},
-            )
-            job_id = await asyncio.to_thread(
-                doc_service.upload_document_from_url,
-                file_name, url, metadata,
-                chunk_size, chunk_overlap,
-                zh_title_enhance, vl_enhance,
-                False,  # dry_run=False，直接入库
-                settings.adb_document_loader_pdf if file_name.lower().endswith(".pdf") else None,
-                text_splitter_name or settings.adb_text_splitter,
-            )
-            doc_job_repo.upsert(file_name=file_name, job_id=job_id, category_id=category_id, collection=collection)
-            doc_job_repo.mark_vectorized(job_id)
-            submitted.append({"file_name": file_name, "job_id": job_id})
+            existing = file_repo.get_by_kb_and_oss_key(kb["id"], oss_key)
+            if existing:
+                file_repo.delete(existing["id"])
 
+            file_record = file_repo.create(
+                kb_id=kb["id"],
+                file_name=file_name,
+                oss_key=oss_key,
+                category_file_id=f["id"],
+                status="pending",
+            )
+            job = job_repo.create(file_id=file_record["id"], kb_id=kb["id"])
+            job_id = job["id"]
+
+            background_tasks.add_task(
+                _run_pipeline,
+                job_id=job_id,
+                file_id=file_record["id"],
+                kb_id=kb["id"],
+                kb_name=kb_name,
+                file_name=file_name,
+                oss_key=oss_key,
+                image_mode=kb["image_mode"],
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                image_dpi=image_dpi,
+            )
+            submitted.append({"file_name": file_name, "job_id": job_id})
         except Exception as e:
-            logger.error("直接入库失败", extra={"file_name": file_name, "error": str(e)})
+            logger.error(f"[start_chunking] {file_name} 提交失败: {e}")
             errors.append({"file_name": file_name, "error": str(e)})
 
-    return {"submitted": len(submitted), "skipped": skipped, "files": submitted, "errors": errors}
+    return {"submitted": len(submitted), "files": submitted, "errors": errors}
 
 
-async def _sync_chunks_after_direct(job_id: str, file_name: str, collection: str) -> None:
-    """
-    后台任务：轮询 ADB job 状态，完成后 fetch-chunks 写入本地表并标记 vectorized。
-    """
-    from app.services.job_service import fetch_and_store_chunks
-    doc_service = ADBDocumentService(namespace=settings.adb_namespace, collection=collection)
-    doc_job_repo = get_document_job_repository()
+# ── 后台流水线（转发给 job_service）──────────────────────────────────────────
 
-    max_wait = 600   # 最多等 10 分钟
-    interval = 10    # 每 10 秒轮询一次
-    elapsed = 0
-
-    while elapsed < max_wait:
-        await asyncio.sleep(interval)
-        elapsed += interval
-        try:
-            detail = await asyncio.to_thread(doc_service.get_upload_job_detail, job_id)
-            status = (detail.get("status") or "").lower()
-            if status == "success":
-                break
-            if status in ("failed", "error", "cancelled"):
-                logger.error(f"[直接入库] job 失败，跳过 fetch-chunks job_id={job_id} status={status}")
-                return
-        except Exception as e:
-            logger.warning(f"[直接入库] 轮询状态失败，继续等待 job_id={job_id}: {e}")
-
-    else:
-        logger.error(f"[直接入库] 等待超时，跳过 fetch-chunks job_id={job_id}")
-        return
-
-    try:
-        result = await fetch_and_store_chunks(job_id)
-        doc_job_repo.mark_vectorized(job_id)
-        logger.info(f"[直接入库] fetch-chunks 完成 job_id={job_id} file={file_name} chunks={result['total']}")
-    except Exception as e:
-        logger.error(f"[直接入库] fetch-chunks 失败 job_id={job_id}: {e}")
+async def _run_pipeline(
+    job_id: str,
+    file_id: str,
+    kb_id: str,
+    kb_name: str,
+    file_name: str,
+    oss_key: str,
+    image_mode: bool,
+    chunk_size: int,
+    chunk_overlap: int,
+    image_dpi: int,
+) -> None:
+    from app.services.job_service import run_job_pipeline
+    await run_job_pipeline(
+        job_id=job_id,
+        file_id=file_id,
+        kb_id=kb_id,
+        kb_name=kb_name,
+        file_name=file_name,
+        oss_key=oss_key,
+        image_mode=image_mode,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        image_dpi=image_dpi,
+    )
 
 
-# ─── 文档列表 / 详情 / 删除 / 检索 ───────────────────────────────────────────
-
-def list_documents() -> dict:
-    documents = get_adb_document_service().list_documents()
-    return {"documents": documents, "total": len(documents)}
-
-
-def get_document_detail(file_name: str) -> dict:
-    return get_adb_document_service().describe_document(file_name)
-
-
-def delete_document(file_name: str) -> None:
-    get_adb_document_service().delete_document(file_name)
-
+# ── 文档检索 ──────────────────────────────────────────────────────────────────
 
 def search_documents(
     query: str,
+    kb_name: str,
     top_k: int = 10,
-    filter_str: Optional[str] = None,
-    hybrid_search: Optional[str] = "Weight",
-    hybrid_alpha: float = 0.5,
-    rerank_factor: Optional[float] = None,
-    include_file_url: bool = False,
-    collection: Optional[str] = None,
+    filter_expr: Optional[str] = None,
 ) -> list:
-    if rerank_factor is not None:
-        if rerank_factor <= 1:
-            raise ValidationError("rerank_factor 必须大于 1")
-        if top_k * rerank_factor > 1000:
-            raise ValidationError(f"top_k({top_k}) * rerank_factor({rerank_factor}) 不能超过 1000")
+    from app.services.milvus_service import get_milvus_service
+    return get_milvus_service().hybrid_search(
+        collection_name=kb_name,
+        query=query,
+        top_k=top_k,
+        filter_expr=filter_expr,
+    )
 
-    hybrid_search_args = None
-    if hybrid_search == "Weight":
-        hybrid_search_args = {"Weight": {"alpha": hybrid_alpha}}
-    elif hybrid_search == "RRF":
-        hybrid_search_args = {"RRF": {"k": 60}}
 
-    col = collection or settings.adb_collection
-    try:
-        results = ADBDocumentService(namespace=settings.adb_namespace, collection=col).query_content(
-            query=query,
-            top_k=top_k,
-            filter_str=filter_str,
-            rerank_factor=rerank_factor,
-            hybrid_search=hybrid_search if hybrid_search else None,
-            hybrid_search_args=hybrid_search_args,
-            include_file_url=include_file_url,
-        )
-    except Exception as e:
-        raise ExternalServiceError(f"检索失败: {e}") from e
+# ── 工具 ──────────────────────────────────────────────────────────────────────
 
-    return sorted(results, key=lambda x: x.get("rerank_score") or x.get("score") or 0, reverse=True)
+def _guess_mime(file_name: str) -> str:
+    ext = file_name.rsplit(".", 1)[-1].lower() if "." in file_name else ""
+    return {
+        "pdf": "application/pdf",
+        "doc": "application/msword",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "txt": "text/plain",
+        "md": "text/markdown",
+        "ppt": "application/vnd.ms-powerpoint",
+        "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }.get(ext, "application/octet-stream")

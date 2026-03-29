@@ -142,7 +142,7 @@ class RAGConfig:
     fallback_message: str = "抱歉，我无法找到相关信息。"
     
     # Knowledge base
-    collection: Optional[str] = None  # 指定知识库，None 则用 settings.adb_collection
+    collection: Optional[str] = None  # 指定知识库名称（Milvus collection name）
 
 
 @dataclass

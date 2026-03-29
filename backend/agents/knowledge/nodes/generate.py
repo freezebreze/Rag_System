@@ -74,14 +74,15 @@ def generate_answer(state: KnowledgeAgentState, config=None) -> Dict[str, Any]:
         image_map: dict = {}  # placeholder → oss_url，用于图文模式
 
         # 判断是否图文模式
-        collection = rag_config.collection or settings.adb_collection
+        collection = rag_config.collection
         is_image_mode = False
-        try:
-            from app.db import get_collection_config_repository
-            cfg = get_collection_config_repository().get_by_collection(settings.adb_namespace, collection)
-            is_image_mode = bool(cfg and cfg.get("image_mode"))
-        except Exception:
-            pass
+        if collection:
+            try:
+                from app.db import get_kb_repository
+                kb = get_kb_repository().get_by_name(collection)
+                is_image_mode = bool(kb and kb.get("image_mode"))
+            except Exception:
+                pass
 
         # 图文模式：批量查询 chunk 关联图片
         chunk_image_map: dict = {}  # chunk_id → [image_record]

@@ -1,26 +1,39 @@
 # -*- coding: utf-8 -*-
-from fastapi import APIRouter, HTTPException
+"""系统配置查询 API"""
+from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-from app.services.adb_vector_service import get_adb_vector_service
+
 from app.core.config import settings
+from app.services.milvus_service import get_milvus_service
 
-router = APIRouter()
+router = APIRouter(prefix="/config", tags=["admin-config"])
 
 
-@router.get("/config")
+@router.get("")
 async def get_config():
-    """获取当前 ADB 配置信息"""
+    milvus_svc = get_milvus_service()
+    collections = []
     try:
-        vs = get_adb_vector_service()
-        return JSONResponse(status_code=200, content={
-            "success": True,
-            "data": {
-                "instance_id": vs.instance_id,
-                "region_id": vs.region_id,
-                "namespace": settings.adb_namespace,
-                "collection": settings.adb_collection,
-                "embedding_model": settings.adb_embedding_model,
-            }
-        })
+        collections = milvus_svc.list_collections()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        pass
+
+    return JSONResponse(content={
+        "success": True,
+        "data": {
+            "milvus": {
+                "host": settings.milvus_host,
+                "port": settings.milvus_port,
+                "collections": collections,
+            },
+            "postgres": {
+                "host": settings.pg_host,
+                "port": settings.pg_port,
+                "db": settings.pg_db,
+            },
+            "embedding": {
+                "model": settings.embedding_model,
+                "dimension": settings.embedding_dimension,
+            },
+        },
+    })

@@ -52,11 +52,10 @@ def single_doc_retrieve(state: KnowledgeAgentState) -> KnowledgeAgentState:
                 collection=collection,
             )
         elif retrieval_strategy == RetrievalStrategy.HYBRID:
-            logger.info("[SingleDocRetrieve] 使用混合检索（含 ADB rerank）")
+            logger.info("[SingleDocRetrieve] 使用混合检索")
             chunks = retrieval_service.hybrid_search(
                 query=query,
                 top_k=20,
-                rerank_factor=2.0,
                 collection=collection,
             )
         else:
@@ -64,7 +63,6 @@ def single_doc_retrieve(state: KnowledgeAgentState) -> KnowledgeAgentState:
             chunks = retrieval_service.hybrid_search(
                 query=query,
                 top_k=20,
-                rerank_factor=2.0,
                 collection=collection,
             )
         

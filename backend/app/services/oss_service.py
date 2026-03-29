@@ -34,6 +34,31 @@ class OSSService:
         self.bucket = settings.oss_bucket
         logger.info(f"OSS 服务初始化: bucket={self.bucket}, region={settings.oss_region}")
 
+    def upload_bytes(self, object_key: str, file_content: bytes) -> str:
+        """
+        直接用完整 object_key 上传（document_service 专用）
+
+        Args:
+            object_key: 完整 OSS 路径，如 kb/my_kb/file.pdf
+            file_content: 文件二进制内容
+
+        Returns:
+            object_key
+        """
+        try:
+            result = self.client.put_object(
+                oss.PutObjectRequest(
+                    bucket=self.bucket,
+                    key=object_key,
+                    body=file_content,
+                )
+            )
+            logger.info(f"OSS 上传成功: {object_key}, status={result.status_code}")
+            return object_key
+        except Exception as e:
+            logger.error(f"OSS 上传失败: {object_key}, error={e}")
+            raise Exception(f"OSS 上传失败: {e}")
+
     def upload_file(self, category_name: str, file_name: str, file_content: bytes) -> str:
         """
         上传文件到 OSS
