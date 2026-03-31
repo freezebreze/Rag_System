@@ -112,7 +112,7 @@ class ChunkImageRepository(BaseRepository):
         oss_url = f"/api/v1/documents/image-proxy?oss_key={quote(oss_key, safe='/')}" if oss_key else ""
         return {
             "id": str(row["id"]),
-            "chunk_id": row["chunk_id"],
+            "chunk_id": str(row["chunk_id"]),
             "placeholder": row.get("placeholder", ""),
             "oss_key": oss_key,
             "oss_url": oss_url,

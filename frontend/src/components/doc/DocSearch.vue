@@ -51,14 +51,16 @@
       </el-row>
 
       <el-row :gutter="16">
-        <el-col :span="18">
-          <el-form-item label="过滤条件">
-            <el-input v-model="form.filter" placeholder="SQL WHERE 格式，如: title = 'test'（可选）" clearable />
+        <el-col :span="12">
+          <el-form-item label="关键词预过滤">
+            <el-input v-model="form.keywordFilter"
+              placeholder="倒排索引精确匹配，多词空格分隔（可选）" clearable />
+            <div style="font-size:11px;color:#909399">填写后先 TEXT_MATCH 过滤，再双路 ANN 检索</div>
           </el-form-item>
         </el-col>
-        <el-col :span="6">
-          <el-form-item label="返回文件URL">
-            <el-switch v-model="form.includeFileUrl" />
+        <el-col :span="12">
+          <el-form-item label="标量过滤">
+            <el-input v-model="form.filter" placeholder="SQL WHERE 格式，如: file_name == 'test.pdf'（可选）" clearable />
           </el-form-item>
         </el-col>
       </el-row>
@@ -144,11 +146,11 @@ const props = defineProps({
 const defaultForm = () => ({
   query: '',
   topK: 10,
-  hybridSearch: 'Weight',
+  hybridSearch: 'RRF',
   hybridAlpha: 0.5,
-  rerankFactor: 0,   // 0 表示不重排
+  rerankFactor: 0,
+  keywordFilter: '',
   filter: '',
-  includeFileUrl: false,
 })
 
 const form = ref(defaultForm())
@@ -156,23 +158,22 @@ const results = ref([])
 const searching = ref(false)
 const searched = ref(false)
 
-const search = async () => {
+  const search = async () => {
   if (!form.value.query.trim()) return
   searching.value = true
   searched.value = false
   results.value = []
   try {
-    const payload = {
-      query: form.value.query,
-      top_k: form.value.topK,
-      hybrid_search: form.value.hybridSearch || null,
-      hybrid_alpha: form.value.hybridAlpha,
-      rerank_factor: form.value.rerankFactor > 1 ? form.value.rerankFactor : null,
-      filter: form.value.filter || null,
-      include_file_url: form.value.includeFileUrl,
-      collection: props.collection || null,
-    }
-    const res = await docApi.searchDocuments(payload)
+    const fd = new FormData()
+    fd.append('query', form.value.query)
+    fd.append('collection', props.collection || '')
+    fd.append('top_k', form.value.topK)
+    fd.append('hybrid_search', form.value.hybridSearch || 'RRF')
+    fd.append('hybrid_alpha', form.value.hybridAlpha)
+    if (form.value.keywordFilter) fd.append('keyword_filter', form.value.keywordFilter)
+    if (form.value.filter) fd.append('filter_expr', form.value.filter)
+
+    const res = await docApi.searchDocuments(fd)
     results.value = res.data.data.results || []
     searched.value = true
     ElMessage.success(`命中 ${results.value.length} 条结果`)

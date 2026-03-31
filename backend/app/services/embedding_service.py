@@ -5,7 +5,7 @@ Embedding 服务
 """
 import logging
 import time
-from typing import List
+from typing import List, Optional
 
 import dashscope
 from dashscope import TextEmbedding
@@ -23,34 +23,38 @@ class EmbeddingService:
         self.batch_size = settings.embedding_batch_size
         self.dimension = settings.embedding_dimension
 
-    def embed_texts(self, texts: List[str]) -> List[List[float]]:
+    def embed_texts(self, texts: List[str], dimension: Optional[int] = None) -> List[List[float]]:
         """
         批量生成向量。
         DashScope 单次最多 25 条，超出自动分批。
         返回与 texts 等长的向量列表。
+        dimension: 指定输出维度，None 则使用配置默认值
         """
         if not texts:
             return []
 
+        dim = dimension or self.dimension
         all_vectors: List[List[float]] = []
         for i in range(0, len(texts), self.batch_size):
             batch = texts[i: i + self.batch_size]
-            vectors = self._embed_batch(batch)
+            vectors = self._embed_batch(batch, dimension=dim)
             all_vectors.extend(vectors)
 
         return all_vectors
 
-    def embed_query(self, text: str) -> List[float]:
+    def embed_query(self, text: str, dimension: Optional[int] = None) -> List[float]:
         """单条查询向量"""
-        vectors = self._embed_batch([text])
+        dim = dimension or self.dimension
+        vectors = self._embed_batch([text], dimension=dim)
         return vectors[0] if vectors else []
 
-    def _embed_batch(self, texts: List[str], retry: int = 3) -> List[List[float]]:
+    def _embed_batch(self, texts: List[str], retry: int = 3, dimension: Optional[int] = None) -> List[List[float]]:
         for attempt in range(retry):
             try:
                 resp = TextEmbedding.call(
                     model=self.model,
                     input=texts,
+                    dimension=dimension,
                 )
                 if resp.status_code != 200:
                     raise RuntimeError(f"DashScope embedding 失败: {resp.message}")

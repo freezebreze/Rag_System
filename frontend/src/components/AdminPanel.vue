@@ -4,21 +4,21 @@
     <div v-if="currentCollection">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
         <el-button :icon="ArrowLeft" circle size="small" @click="currentCollection = null" />
-        <span style="font-size:16px;font-weight:600">{{ currentCollection.collection_name }}</span>
-        <el-tag type="info" size="small">{{ currentCollection.namespace }}</el-tag>
+        <span style="font-size:16px;font-weight:600">{{ currentCollection.display_name || currentCollection.name }}</span>
+        <el-tag type="info" size="small">{{ currentCollection.name }}</el-tag>
         <el-tag size="small" v-if="currentCollection.embedding_model">{{ currentCollection.embedding_model }}</el-tag>
       </div>
       <el-tabs type="border-card">
         <el-tab-pane label="📤 上传文档" name="upload">
-      <DocUpload :collection="currentCollection.collection_name"
+      <DocUpload :collection="currentCollection.name"
             :image-mode="currentCollection.image_mode"
             @go-categories="$emit('go-categories')" />
         </el-tab-pane>
         <el-tab-pane label="📚 文件列表" name="files">
-          <DocList ref="docListRef" :collection="currentCollection.collection_name" @view-chunks="openChunkEditor" />
+          <DocList ref="docListRef" :collection="currentCollection.name" @view-chunks="openChunkEditor" />
         </el-tab-pane>
         <el-tab-pane label="🔍 切片检索" name="search">
-          <DocSearch :collection="currentCollection.collection_name" />
+          <DocSearch :collection="currentCollection.name" />
         </el-tab-pane>
       </el-tabs>
 
@@ -47,7 +47,7 @@
             </div>
           </template>
           <el-table :data="collections" v-loading="colListLoading" empty-text="暂无知识库">
-            <el-table-column prop="collection_name" label="知识库名称" min-width="160" />
+            <el-table-column prop="name" label="知识库名称" min-width="160" />
             <el-table-column prop="embedding_model" label="Embedding 模型" min-width="160" />
             <el-table-column prop="dimension" label="维度" width="80" />
             <el-table-column prop="metrics" label="相似度" width="90" />
@@ -68,10 +68,10 @@
               <template #default="{ row }">
                 <el-button type="primary" size="small" plain @click="enterCollection(row)">管理</el-button>
                 <el-popconfirm
-                  :title="`确认删除知识库「${row.collection_name}」？`"
+                  :title="`确认删除知识库「${row.name}」？`"
                   confirm-button-text="删除" cancel-button-text="取消"
                   confirm-button-type="danger"
-                  @confirm="deleteCollection(row.namespace, row.collection_name)"
+                  @confirm="deleteCollection(row.name)"
                 >
                   <template #reference>
                     <el-button type="danger" size="small" plain style="margin-left:4px">删除</el-button>
@@ -128,21 +128,20 @@
             <el-divider content-position="left">向量配置</el-divider>
             <el-form-item label="Embedding 模型">
               <el-select v-model="colForm.embedding_model" @change="onModelChange" style="width:320px">
-                <el-option-group label="推荐">
-                  <el-option label="text-embedding-v3（默认，1024维）" value="text-embedding-v3" />
-                  <el-option label="multimodal-embedding-v1（多模态，1024维）" value="multimodal-embedding-v1" />
-                </el-option-group>
-                <el-option-group label="其他">
-                  <el-option label="text-embedding-v2（1536维）" value="text-embedding-v2" />
-                  <el-option label="text-embedding-v1（1536维）" value="text-embedding-v1" />
-                  <el-option label="m3e-base（768维）" value="m3e-base" />
-                  <el-option label="m3e-small（512维）" value="m3e-small" />
-                </el-option-group>
+                <el-option label="text-embedding-v3（支持自定义维度）" value="text-embedding-v3" />
+                <el-option label="text-embedding-v4（支持 1536 / 2048 维）" value="text-embedding-v4" />
               </el-select>
             </el-form-item>
             <el-form-item label="向量维度">
-              <el-input-number v-model="colForm.dimension" :min="64" :max="4096" :controls="false" style="width:140px" />
-              <span class="tip" style="margin-left:8px">留空自动匹配模型默认维度</span>
+              <el-select v-model="colForm.dimension" style="width:200px">
+                <el-option
+                  v-for="d in availableDims"
+                  :key="d"
+                  :label="`${d} 维`"
+                  :value="d"
+                />
+              </el-select>
+              <span class="tip" style="margin-left:8px">{{ dimTip }}</span>
             </el-form-item>
             <el-form-item label="相似度算法">
               <el-radio-group v-model="colForm.metrics">
@@ -209,7 +208,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, watch, onMounted } from 'vue'
+import { ref, reactive, watch, onMounted, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import axios from 'axios'
@@ -294,20 +293,16 @@ const colListLoading = ref(false)
 const loadCollections = async () => {
   colListLoading.value = true
   try {
-    const { data } = await axios.get(`${API}/admin/collection/list`, {
-      params: { namespace: defaultNs.value }
-    })
+    const { data } = await axios.get(`${API}/admin/collections`)
     if (data.success) collections.value = data.data.collections || []
   } catch (e) {
     ElMessage.error('查询失败: ' + (e.response?.data?.detail || e.message))
   } finally { colListLoading.value = false }
 }
 
-const deleteCollection = async (namespace, collectionName) => {
+const deleteCollection = async (collectionName) => {
   try {
-    await axios.delete(`${API}/admin/collection/delete`, {
-      data: { namespace, collection: collectionName }
-    })
+    await axios.delete(`${API}/admin/collections/${collectionName}`)
     ElMessage.success(`知识库「${collectionName}」已删除`)
     await loadCollections()
   } catch (e) {
@@ -320,15 +315,29 @@ const colCreateLoading = ref(false)
 
 const defaultColForm = () => ({
   collection: '', parser: 'zh_cn',
-  embedding_model: 'text-embedding-v3', dimension: null, metrics: 'cosine',
+  embedding_model: 'text-embedding-v3', dimension: 1024, metrics: 'cosine',
   hnsw_m: null, hnsw_ef_construction: null,
   pq_enable_bool: false, external_storage_bool: false,
   image_mode: false,
 })
 const colForm = ref(defaultColForm())
 
-const modelDimMap = { 'text-embedding-v2': 1536, 'text-embedding-v1': 1536, 'm3e-base': 768, 'm3e-small': 512 }
-const onModelChange = (val) => { colForm.value.dimension = modelDimMap[val] ?? null }
+const MODEL_DIMS = {
+  'text-embedding-v3': [1024, 768, 512, 256, 128, 64],
+  'text-embedding-v4': [1536, 2048],
+}
+
+const availableDims = computed(() => MODEL_DIMS[colForm.value.embedding_model] || [1024])
+const dimTip = computed(() =>
+  colForm.value.embedding_model === 'text-embedding-v4'
+    ? '仅支持 1536 / 2048 维'
+    : '支持自定义维度：1024 / 768 / 512 / 256 / 128 / 64'
+)
+
+const onModelChange = (val) => {
+  const dims = MODEL_DIMS[val] || [1024]
+  colForm.value.dimension = dims[0]
+}
 
 const createCollection = async () => {
   if (!colForm.value.collection) return ElMessage.warning('请填写知识库名称')
@@ -345,20 +354,14 @@ const createCollection = async () => {
       }))
 
     const payload = {
-      namespace: defaultNs.value,
-      collection: colForm.value.collection,
-      parser: colForm.value.parser,
-      embedding_model: colForm.value.embedding_model || null,
-      dimension: colForm.value.dimension || null,
-      metrics: colForm.value.metrics,
-      hnsw_m: colForm.value.hnsw_m || null,
-      hnsw_ef_construction: colForm.value.hnsw_ef_construction || null,
-      pq_enable: colForm.value.pq_enable_bool ? 1 : 0,
-      external_storage: colForm.value.external_storage_bool ? 1 : 0,
-      metadata_fields: enabledFields,
+      name: colForm.value.collection,
+      display_name: colForm.value.collection,
       image_mode: colForm.value.image_mode,
+      embedding_model: colForm.value.embedding_model || 'text-embedding-v3',
+      vector_dim: colForm.value.dimension || 1024,
+      metadata_fields: enabledFields,
     }
-    const { data } = await axios.post(`${API}/admin/collection/create`, payload)
+    const { data } = await axios.post(`${API}/admin/collections`, payload)
     if (data.success) {
       ElMessage.success(`知识库「${colForm.value.collection}」创建成功`)
       resetColForm()

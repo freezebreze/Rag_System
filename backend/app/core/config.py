@@ -98,3 +98,7 @@ SUPPORTED_MODELS = {
     "qwen-long":  {"name": "qwen-long",  "description": "支持长文本（最大2M tokens）", "provider": "dashscope", "max_tokens": 2000000, "cost_per_1k_tokens": 0.001},
     "qwen-vl-plus": {"name": "qwen-vl-plus", "description": "视觉理解模型", "provider": "dashscope", "max_tokens": 8000},
 }
+
+
+class SuccessMessages:
+    API_READY = "Knowledge Agent API is ready"

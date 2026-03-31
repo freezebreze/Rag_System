@@ -15,6 +15,17 @@ from app.services.oss_service import get_oss_service
 logger = logging.getLogger(__name__)
 
 
+def _delete_job_images_from_oss(job_id: str) -> None:
+    """删除一个 job 下所有切片图片的 OSS 文件（不删 PG，PG 由 CASCADE 处理）"""
+    try:
+        oss_keys = get_chunk_image_repository().get_oss_keys_by_job(job_id)
+        if oss_keys:
+            get_oss_service().delete_objects(oss_keys)
+            logger.info(f"已删除 job {job_id} 的 {len(oss_keys)} 张 OSS 图片")
+    except Exception as e:
+        logger.warning(f"OSS 图片删除失败（继续）: job_id={job_id}, error={e}")
+
+
 # ── 守卫 ──────────────────────────────────────────────────────────────────────
 
 def check_not_vectorized(job_id: str) -> None:

@@ -2,9 +2,10 @@
 """
 切片仓储
 表：knowledge_chunk（当前内容）+ knowledge_chunk_origin（原始内容，只写一次）
-chunk_id 格式："{job_id}_{chunk_index}"
+chunk_id: UUID
 """
 import json
+import uuid
 import logging
 from typing import Any, Dict, List, Optional
 from app.db.base_repository import BaseRepository
@@ -20,16 +21,15 @@ class ChunkRepository(BaseRepository):
         """
         标准模式批量写入。
         chunks 格式：[{"page_content": str, "metadata": dict}, ...]
-        chunk_id = "{job_id}_{index}"
+        chunk_id = UUID
         """
         if not chunks:
             return
-        # 先清理该 job 旧数据
         self._execute_sql("DELETE FROM knowledge_chunk WHERE job_id = %s", (job_id,))
 
         chunk_params, origin_params = [], []
         for idx, chunk in enumerate(chunks):
-            chunk_id = f"{job_id}_{idx}"
+            chunk_id = str(uuid.uuid4())
             content = chunk.get("page_content") or chunk.get("content") or ""
             metadata = json.dumps(chunk.get("metadata") or {}, ensure_ascii=False)
             chunk_params.append((chunk_id, job_id, idx, content, metadata))
@@ -46,8 +46,8 @@ class ChunkRepository(BaseRepository):
 
     def bulk_insert_with_ids(self, job_id: str, file_name: str, chunks: List[Dict[str, Any]]):
         """
-        图文模式专用：直接使用 parse_pdf/parse_word 返回的 chunk_id。
-        chunks 格式：[{"chunk_id": str, "content": str, "metadata": dict}, ...]
+        图文模式专用：使用 parse_pdf/parse_word 返回的 UUID chunk_id。
+        chunks 格式：[{"chunk_id": str(UUID), "content": str, "metadata": dict, "chunk_index": int}, ...]
         """
         if not chunks:
             return
@@ -55,11 +55,8 @@ class ChunkRepository(BaseRepository):
 
         chunk_params, origin_params = [], []
         for enumerate_idx, chunk in enumerate(chunks):
-            chunk_id = chunk.get("chunk_id") or f"{job_id}_{enumerate_idx}"
-            try:
-                chunk_index = int(chunk_id.rsplit("_", 1)[-1])
-            except (ValueError, IndexError):
-                chunk_index = enumerate_idx
+            chunk_id = str(chunk.get("chunk_id") or uuid.uuid4())
+            chunk_index = chunk.get("chunk_index", enumerate_idx)
             content = chunk.get("content") or ""
             metadata = json.dumps(chunk.get("metadata") or {}, ensure_ascii=False)
             chunk_params.append((chunk_id, job_id, chunk_index, content, metadata))
@@ -191,7 +188,7 @@ class ChunkRepository(BaseRepository):
         elif isinstance(meta_raw, dict):
             metadata = meta_raw
         return {
-            "chunk_id": row["id"],
+            "chunk_id": str(row["id"]),
             "job_id": str(row["job_id"]),
             "chunk_index": row.get("chunk_index"),
             # 兼容旧接口：current_content / original_content

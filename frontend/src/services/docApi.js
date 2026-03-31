@@ -4,24 +4,17 @@ const BASE = 'http://localhost:8000/api/v1'
 
 export const docApi = {
   // ── 文档 ──────────────────────────────────────────────────────────────────
-  listDocuments: () => axios.get(`${BASE}/documents/list`),
-  getDocument: (fileName) => axios.get(`${BASE}/documents/detail/${encodeURIComponent(fileName)}`),
-  deleteDocument: (fileName) => axios.delete(`${BASE}/documents/delete/${encodeURIComponent(fileName)}`),
-  searchDocuments: (data) => axios.post(`${BASE}/documents/search`, data, { headers: { 'Content-Type': 'application/json' } }),
   uploadDocument: (formData) => axios.post(`${BASE}/documents/upload`, formData),
   uploadDocumentToCategory: (formData) => axios.post(`${BASE}/documents/upload-to-category`, formData),
   batchUploadToCategory: (formData) => axios.post(`${BASE}/documents/batch-upload-to-category`, formData),
-  uploadWithImages: (formData) => axios.post(`${BASE}/documents/upload-with-images`, formData),
+  searchDocuments: (formData) => axios.post(`${BASE}/documents/search`, formData),
   startChunking: (categoryId, params = {}) =>
     axios.post(`${BASE}/documents/start-chunking/${categoryId}`, null, { params }),
-  startChunkingDirect: (categoryId, params = {}) =>
-    axios.post(`${BASE}/documents/start-chunking-direct/${categoryId}`, null, { params }),
 
   // ── Job ───────────────────────────────────────────────────────────────────
-  listJobs: (limit = 200) => axios.get(`${BASE}/jobs`, { params: { limit } }),
+  listJobs: (kbName, limit = 200) => axios.get(`${BASE}/jobs`, { params: { kb_name: kbName, limit } }),
   getJob: (jobId) => axios.get(`${BASE}/jobs/${encodeURIComponent(jobId)}`),
-  fetchChunks: (jobId) => axios.post(`${BASE}/jobs/${encodeURIComponent(jobId)}/fetch-chunks`),
-  cancelJob: (jobId) => axios.post(`${BASE}/jobs/${encodeURIComponent(jobId)}/cancel`),
+  upsertJob: (jobId) => axios.post(`${BASE}/jobs/${encodeURIComponent(jobId)}/upsert`),
 
   // ── 切片 ──────────────────────────────────────────────────────────────────
   getChunksByJob: (jobId) => axios.get(`${BASE}/chunks/job/${encodeURIComponent(jobId)}`),
@@ -58,9 +51,9 @@ export const docApi = {
 
   // ── 文件 ──────────────────────────────────────────────────────────────────
   listFiles: (params = {}) => axios.get(`${BASE}/files`, { params }),
-  deleteFile: (jobId, collection) => axios.delete(`${BASE}/files`, { data: { job_id: jobId, collection } }),
-  batchDeleteFiles: (jobIds, collection) =>
-    axios.post(`${BASE}/files/batch-delete`, { job_ids: jobIds, collection }),
+  deleteFile: (fileId) => axios.delete(`${BASE}/files`, { data: { file_id: fileId } }),
+  batchDeleteFiles: (fileIds, kbName) =>
+    axios.post(`${BASE}/files/batch-delete`, { file_ids: fileIds, kb_name: kbName }),
 
   // ── 类目 ──────────────────────────────────────────────────────────────────
   listCategories: () => axios.get(`${BASE}/categories`),
@@ -73,5 +66,8 @@ export const docApi = {
     axios.post(`${BASE}/categories/${categoryId}/files/batch-delete`, { file_ids: fileIds }),
 
   // ── Admin ─────────────────────────────────────────────────────────────────
-  listCollections: (namespace) => axios.get(`${BASE}/admin/collection/list`, { params: { namespace } }),
+  listCollections: () => axios.get(`${BASE}/admin/collections`),
+  createCollection: (data) => axios.post(`${BASE}/admin/collections`, data),
+  updateCollection: (kbName, data) => axios.put(`${BASE}/admin/collections/${kbName}`, data),
+  deleteCollection: (kbName) => axios.delete(`${BASE}/admin/collections/${kbName}`),
 }

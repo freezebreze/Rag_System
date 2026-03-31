@@ -192,14 +192,7 @@
           >
             ✂️ 开始切分
           </el-button>
-          <el-button
-            type="success"
-            :disabled="!selectedCategoryId || (!collection && !selectedCollection)"
-            :loading="chunkingDirect"
-            @click="startChunkingDirect"
-          >
-            ⚡ 直接入库
-          </el-button>
+
           <span v-if="!selectedCategoryId" style="color:#909399;font-size:13px">
             请先选择类目
           </span>
@@ -240,7 +233,6 @@ const collections = ref([])
 const collectionsLoading = ref(false)
 const selectedCollection = ref('')
 const chunking = ref(false)
-const chunkingDirect = ref(false)
 const chunkResult = ref(null)
 
 const config = ref({
@@ -368,7 +360,7 @@ const startChunking = async () => {
   chunkResult.value = null
   try {
     const res = await docApi.startChunking(selectedCategoryId.value, {
-      collection: col,
+      kb_name: col,
       chunk_size: catConfig.value.chunkSize,
       chunk_overlap: catConfig.value.chunkOverlap,
       text_splitter_name: catConfig.value.textSplitterName,
@@ -394,38 +386,7 @@ const startChunking = async () => {
   }
 }
 
-const startChunkingDirect = async () => {
-  if (!selectedCategoryId.value) return
-  const col = props.collection || selectedCollection.value
-  if (!col) return
-  chunkingDirect.value = true
-  chunkResult.value = null
-  try {
-    const res = await docApi.startChunkingDirect(selectedCategoryId.value, {
-      collection: col,
-      chunk_size: catConfig.value.chunkSize,
-      chunk_overlap: catConfig.value.chunkOverlap,
-      text_splitter_name: catConfig.value.textSplitterName,
-      zh_title_enhance: catConfig.value.zhTitleEnhance,
-      vl_enhance: catConfig.value.vlEnhance,
-    })
-    chunkResult.value = res.data.data
-    const { submitted, errors } = res.data.data
-    if (submitted === 0) {
-      ElMessage.info(res.data.message)
-    } else {
-      ElMessage.success(`已直接入库 ${submitted} 个文件`)
-      emit('uploaded', res.data.data)
-    }
-    if (errors?.length) {
-      ElMessage.warning(`${errors.length} 个文件失败`)
-    }
-  } catch (err) {
-    ElMessage.error('直接入库失败: ' + (err.response?.data?.detail || err.message))
-  } finally {
-    chunkingDirect.value = false
-  }
-}
+
 </script>
 
 <style scoped>

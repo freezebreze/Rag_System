@@ -82,6 +82,25 @@ async def run_job_pipeline(
             image_records = []
 
         # ── Step 2: 写 chunk 到 PG ────────────────────────────────────────────
+        # 先清理旧切片的 OSS 图片（bulk_insert 内部会 DELETE 旧 chunk，CASCADE 删 PG 图片记录，但 OSS 需手动清）
+        from app.services.chunk_service import _delete_job_images_from_oss
+        await asyncio.to_thread(_delete_job_images_from_oss, job_id)
+
+        # 注入 auto_inject 元数据字段（如 title = 文件名前缀）
+        from app.db import get_kb_repository
+        kb = get_kb_repository().get_by_id(kb_id)
+        metadata_fields = kb.get("metadata_fields") or [] if kb else []
+        inject_map = {}
+        for mf in metadata_fields:
+            if mf.get("auto_inject") == "filename_prefix":
+                inject_map[mf["key"]] = file_name.rsplit(".", 1)[0]
+        if inject_map:
+            for chunk in chunks:
+                meta = chunk.get("metadata") or {}
+                meta.update(inject_map)
+                chunk["metadata"] = meta
+            logger.info(f"[pipeline] 注入元数据: {inject_map}")
+
         chunk_repo = get_chunk_repository()
         if image_mode:
             await asyncio.to_thread(chunk_repo.bulk_insert_with_ids, job_id, file_name, chunks)
@@ -92,41 +111,9 @@ async def run_job_pipeline(
             await asyncio.to_thread(get_chunk_image_repository().bulk_insert, image_records)
 
         chunk_count = len(chunks)
-        job_repo.update_status(job_id, "chunked", stage="切分完成，准备向量化", chunk_count=chunk_count, progress=50)
-
-        # ── Step 3: Embedding + 写 Milvus ─────────────────────────────────────
-        job_repo.update_status(job_id, "embedding", stage="正在生成向量并写入 Milvus", progress=60)
-
-        # 从 PG 读取切片（含 chunk_id）
-        pg_chunks = await asyncio.to_thread(chunk_repo.get_by_job, job_id)
-        milvus_chunks = [
-            {
-                "chunk_id":    c["chunk_id"],
-                "job_id":      job_id,
-                "file_name":   file_name,
-                "chunk_index": c["chunk_index"],
-                "content":     c["current_content"],
-                "metadata":    c.get("metadata") or {},
-            }
-            for c in pg_chunks if c.get("current_content")
-        ]
-
-        from app.services.milvus_service import get_milvus_service
-        milvus_svc = get_milvus_service()
-        # 确保 collection 存在
-        from app.db import get_kb_repository
-        kb = get_kb_repository().get_by_id(kb_id)
-        milvus_svc.get_or_create_collection(
-            kb_name,
-            dim=kb["vector_dim"] if kb else 1536,
-            image_mode=image_mode,
-        )
-        await asyncio.to_thread(milvus_svc.upsert_chunks, kb_name, milvus_chunks)
-
-        # ── Step 4: 标记完成 ──────────────────────────────────────────────────
-        job_repo.mark_vectorized(job_id)
-        file_repo.update_status(file_id, "done")
-        logger.info(f"[pipeline] job_id={job_id} 完成，共 {chunk_count} 个切片")
+        job_repo.update_status(job_id, "chunked", stage="切分完成，可审查切片后手动向量化", chunk_count=chunk_count, progress=50)
+        file_repo.update_status(file_id, "chunked")
+        logger.info(f"[pipeline] job_id={job_id} 切分完成，共 {chunk_count} 个切片，等待手动向量化")
 
     except Exception as e:
         logger.error(f"[pipeline] job_id={job_id} 失败: {e}")
@@ -169,7 +156,10 @@ async def upsert_job_to_milvus(job_id: str) -> dict:
     from app.services.milvus_service import get_milvus_service
     milvus_svc = get_milvus_service()
     milvus_svc.get_or_create_collection(kb["name"], dim=kb["vector_dim"])
-    result = await asyncio.to_thread(milvus_svc.upsert_chunks, kb["name"], milvus_chunks)
+    result = await asyncio.to_thread(
+        milvus_svc.upsert_chunks, kb["name"], milvus_chunks,
+        kb["vector_dim"], kb.get("embedding_model"), kb.get("metadata_fields") or []
+    )
     job_repo.mark_vectorized(job_id)
     return result
 

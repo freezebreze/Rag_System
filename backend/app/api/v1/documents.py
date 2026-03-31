@@ -101,15 +101,25 @@ async def start_chunking(
 @router.post("/search")
 async def search_documents(
     query: str = Form(...),
-    kb_name: str = Form(...),
+    kb_name: str = Form(None),
+    collection: str = Form(None),
     top_k: int = Form(10),
     filter_expr: Optional[str] = Form(None),
+    hybrid_search: Optional[str] = Form(None),
+    hybrid_alpha: float = Form(0.5),
+    keyword_filter: Optional[str] = Form(None),
 ):
+    kb = kb_name or collection
+    if not kb:
+        return JSONResponse(status_code=422, content={"detail": "kb_name 或 collection 必须提供"})
     results = document_service.search_documents(
         query=query,
-        kb_name=kb_name,
+        kb_name=kb,
         top_k=top_k,
         filter_expr=filter_expr or None,
+        ranker=hybrid_search or "RRF",
+        hybrid_alpha=hybrid_alpha,
+        keyword_filter=keyword_filter or None,
     )
     return JSONResponse(content={
         "success": True,

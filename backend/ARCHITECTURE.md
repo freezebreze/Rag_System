@@ -8,7 +8,39 @@
 - **向量数据库**：Milvus Standalone（Docker）
 - **业务数据库**：PostgreSQL（Docker）
 - **对象存储**：阿里云 OSS
-- **Embedding**：DashScope text-embedding-v3（自调用，批量）
+- **Embedding**：DashScope text-embedding-v3 / text-embedding-v4（自调用，批量，支持自定义维度）
+
+---
+
+## 快速启动
+
+```bash
+# 1. 启动 Docker 服务（Milvus + PostgreSQL，首次约 30-60 秒）
+docker-compose up -d
+
+# 2. 配置环境变量
+cd backend
+cp .env.example .env   # 填写必填项见下方
+
+# 3. 安装依赖
+pip install -r requirements.txt
+
+# 4. 启动后端（自动建表）
+python main.py
+```
+
+### 必填环境变量
+
+```env
+DASHSCOPE_API_KEY=sk-xxxx
+OSS_BUCKET=your-bucket
+ALIBABA_CLOUD_ACCESS_KEY_ID=xxxx
+ALIBABA_CLOUD_ACCESS_KEY_SECRET=xxxx
+PG_HOST=localhost
+PG_USER=kbuser
+PG_PASSWORD=kbpass
+MILVUS_HOST=localhost
+```
 
 ---
 
@@ -16,21 +48,18 @@
 
 ```
 backend/
-├── main.py                        # 启动入口
+├── main.py
 ├── app/
-│   ├── main.py                    # FastAPI app 工厂，注册路由、lifespan（启动时 init_db）
+│   ├── main.py                    # FastAPI app 工厂，注册路由、lifespan
 │   ├── core/
-│   │   ├── config.py              # Settings：Milvus/PG/OSS/Embedding/LLM 配置
-│   │   ├── exceptions.py          # 统一业务异常体系
+│   │   ├── config.py              # Settings：所有配置，启动时校验必填项
+│   │   ├── exceptions.py          # 统一业务异常
 │   │   ├── logging.py             # 结构化日志
 │   │   └── prompts.py             # LLM prompt 模板
-│   ├── models/
-│   │   ├── requests.py            # Pydantic 请求模型
-│   │   └── responses.py           # Pydantic 响应模型
 │   ├── api/v1/
 │   │   ├── chat.py                # POST /chat
 │   │   ├── knowledge.py           # POST /knowledge（RAG 问答）
-│   │   ├── documents.py           # 文档上传、类目文件上传、切分触发
+│   │   ├── documents.py           # 文档上传/切分/检索
 │   │   ├── jobs.py                # 任务状态查询、手动向量化
 │   │   ├── chunks.py              # 切片查看/编辑/清洗/撤回/向量化/图片管理
 │   │   ├── categories.py          # 类目 CRUD
@@ -40,62 +69,64 @@ backend/
 │   │       ├── collection.py      # 知识库 CRUD（Milvus + PG）
 │   │       └── config.py          # 系统配置查询
 │   ├── services/
-│   │   ├── milvus_service.py      # Milvus：collection管理/upsert/hybrid_search/delete
-│   │   ├── embedding_service.py   # DashScope embedding，批量调用，限流重试
+│   │   ├── milvus_service.py      # Milvus：collection管理/upsert/hybrid_search
+│   │   ├── embedding_service.py   # DashScope embedding，支持 dimension 参数
 │   │   ├── chunk_splitter.py      # 纯文本切分（标准模式），中文友好
-│   │   ├── document_service.py    # 文档上传业务逻辑，触发 BackgroundTask
-│   │   ├── job_service.py         # run_job_pipeline：chunking→embedding→done
+│   │   ├── document_service.py    # 文档上传业务逻辑
+│   │   ├── job_service.py         # run_job_pipeline：chunking→chunked（手动触发向量化）
 │   │   ├── chunk_service.py       # 切片编辑/清洗/撤回/向量化/图片管理
-│   │   ├── file_service.py        # 知识库文件列表/联动删除
+│   │   ├── file_service.py        # 知识库文件列表/联动删除（含 OSS 图片清理）
 │   │   ├── category_service.py    # 类目 CRUD + 文件管理
 │   │   ├── knowledge_service.py   # Knowledge RAG 业务逻辑
 │   │   ├── chat_service.py        # Chat 业务逻辑
 │   │   ├── oss_service.py         # OSS 文件上传/下载/删除
-│   │   ├── doc_image_parser.py    # PyMuPDF 解析 PDF，提取文字切片 + 图片
+│   │   ├── doc_image_parser.py    # PyMuPDF 解析 PDF/DOCX，提取文字切片 + 图片
 │   │   └── chunk_cleaner.py       # 切片清洗（正则 + LLM）
 │   └── db/
-│       ├── pg_client.py           # psycopg2 连接池，参数化查询
+│       ├── pg_client.py           # psycopg2 连接池
 │       ├── init_db.py             # 建表脚本（幂等），启动时调用
-│       ├── base_repository.py     # BaseRepository：封装 pg_client 调用
+│       ├── base_repository.py     # BaseRepository
 │       ├── kb_repository.py       # knowledge_base 表
 │       ├── file_repository.py     # knowledge_file 表
-│       ├── job_repository.py      # knowledge_job 表（自维护状态机）
+│       ├── job_repository.py      # knowledge_job 表
 │       ├── chunk_repository.py    # knowledge_chunk + knowledge_chunk_origin 表
 │       ├── chunk_image_repository.py  # knowledge_chunk_image 表
-│       ├── category_repository.py # knowledge_category 表
-│       └── category_file_repository.py # knowledge_category_file 表
+│       ├── category_repository.py
+│       └── category_file_repository.py
 └── agents/
     ├── knowledge/                 # Knowledge Agent（RAG 流水线）
-    │   ├── services/retrieval.py  # RetrievalService：调 milvus_service.hybrid_search
-    │   └── nodes/                 # 各节点（query_rewrite/classify/retrieve/filter/generate...）
-    ├── supervisor/                # Supervisor Agent（多 agent 协调）
-    └── specialized/               # 专用 Agent（email/search，mock）
+    │   ├── services/retrieval.py  # RetrievalService：hybrid / keyword_filter+hybrid
+    │   └── nodes/                 # query_rewrite/classify/retrieve/filter/generate...
+    ├── supervisor/
+    └── specialized/               # email/search（mock）
 ```
 
 ---
 
 ## 数据库表结构
 
-### PostgreSQL（业务数据）
+### PostgreSQL
 
 | 表名 | 用途 | 主键 |
 |------|------|------|
-| `knowledge_base` | 知识库配置（名称/image_mode/embedding_model） | UUID |
-| `knowledge_category` | 类目（文件夹，独立体系） | UUID |
+| `knowledge_base` | 知识库配置（name/image_mode/embedding_model/vector_dim/metadata_fields） | UUID |
+| `knowledge_category` | 类目（独立体系） | UUID |
 | `knowledge_category_file` | 类目文件（OSS 引用） | UUID |
-| `knowledge_file` | 知识库文件（kb_id + oss_key，可追溯来源类目） | UUID |
-| `knowledge_job` | 处理任务（状态机：pending→chunking→chunked→embedding→done/error） | UUID |
-| `knowledge_chunk` | 切片当前内容（可编辑） | TEXT（`{job_id}_{chunk_index}`） |
-| `knowledge_chunk_origin` | 切片原始内容（只写一次，用于撤回） | TEXT（FK→chunk） |
+| `knowledge_file` | 知识库文件（kb_id + oss_key） | UUID |
+| `knowledge_job` | 处理任务（状态机） | UUID |
+| `knowledge_chunk` | 切片当前内容（可编辑） | UUID |
+| `knowledge_chunk_origin` | 切片原始内容（只写一次，用于撤回） | UUID（FK→chunk） |
 | `knowledge_chunk_image` | 切片图片（图文模式） | UUID |
+
+`knowledge_base` 新增 `metadata_fields JSONB` 字段，存用户配置的元数据字段（key/type/fulltext/index/auto_inject）。
 
 ### 实体关系
 
 ```
 knowledge_base
-    └── knowledge_file (kb_id, category_file_id?)
+    └── knowledge_file (kb_id)
               └── knowledge_job (file_id, kb_id)
-                        └── knowledge_chunk (job_id)
+                        └── knowledge_chunk (job_id)  ← UUID 主键
                                   ├── knowledge_chunk_origin (chunk_id)
                                   └── knowledge_chunk_image (chunk_id)
 
@@ -109,14 +140,15 @@ knowledge_category
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `chunk_id` | VARCHAR PK | `{job_id}_{chunk_index}` |
+| `chunk_id` | VARCHAR(36) PK | UUID，与 PG knowledge_chunk.id 对应 |
 | `job_id` | VARCHAR | 关联 PG knowledge_job.id |
 | `file_name` | VARCHAR | 文件名 |
 | `chunk_index` | INT64 | 切片序号 |
-| `content` | VARCHAR | 文本内容（启用中文分析器 + BM25） |
+| `content` | VARCHAR | 文本内容（enable_analyzer + enable_match，中文分析器） |
 | `sparse_bm25` | SPARSE_FLOAT_VECTOR | BM25 Function 自动生成 |
-| `dense` | FLOAT_VECTOR(1536) | DashScope embedding |
-| dynamic fields | - | metadata 字段 |
+| `dense` | FLOAT_VECTOR(dim) | DashScope embedding，dim 由知识库配置决定 |
+| `[metadata_fields]` | VARCHAR | 用户配置的 fulltext 字段（如 title），显式声明 enable_match=True |
+| dynamic fields | - | 其他 metadata |
 
 索引：HNSW（dense）+ SPARSE_WAND（sparse_bm25）
 
@@ -124,62 +156,108 @@ knowledge_category
 
 ## 核心业务流程
 
-### 1. 文档上传流程
-
-```
-POST /documents/upload (kb_name, file)
-  → validate_file()
-  → OSS 上传（kb/{kb_name}/{file_name}）
-  → 写 knowledge_file(status=pending)
-  → 写 knowledge_job(status=pending)
-  → 立即返回 job_id
-  → BackgroundTask: run_job_pipeline()
-      ├── status=chunking → 下载 OSS → 切分（图文/标准）
-      ├── status=chunked  → 写 knowledge_chunk + knowledge_chunk_origin
-      ├── status=embedding → embed → upsert Milvus
-      └── status=done / error
-```
-
-### 2. 类目批量切分流程
+### 1. 文档切分流程（两阶段）
 
 ```
 POST /documents/start-chunking/{category_id}?kb_name=xxx
-  → 遍历 knowledge_category_file
-  → 每个文件：写 knowledge_file + knowledge_job
-  → 触发 BackgroundTask（同上流水线）
+  → 遍历 category_file → 写 knowledge_file + knowledge_job
+  → BackgroundTask: run_job_pipeline()
+      ├── chunking → 下载 OSS → 切分（图文/标准）
+      │     └── 注入 auto_inject 元数据（如 title = 文件名前缀）
+      └── chunked → 写 knowledge_chunk（UUID 主键）+ origin
+          ← 停在此状态，等待人工审查后手动触发向量化
+
+POST /chunks/job/{job_id}/upsert  （手动触发）
+  → 读 PG chunks → embed（按 kb 的 embedding_model + vector_dim）
+  → fulltext 字段拼接到 content 前（BM25 + dense 都感知）
+  → upsert Milvus → mark_vectorized → done
 ```
 
-### 3. RAG 问答流程
+### 2. RAG 问答检索策略
+
+```
+determine_retrieval_strategy:
+  ├── KEYWORD_ONLY（含错误码/代码/精确匹配关键词）
+  │     → TEXT_MATCH 预过滤 + dense + BM25 hybrid_search
+  └── HYBRID（常规查询）
+        → dense + BM25 hybrid_search（RRF 或 WeightedRanker）
+
+hybrid_search 参数：
+  - ranker: RRF（默认）| Weight（hybrid_alpha 控制 dense 权重）
+  - keyword_filter: TEXT_MATCH(content, '关键词') 预过滤候选集
+```
+
+### 3. 完整 RAG 流水线
 
 ```
 POST /knowledge
-  → knowledge_agent.invoke()
-      query_rewrite → query_classify → determine_retrieval_strategy
-        → [single_doc_retrieve 或 multi_doc_retrieve]
-            调 milvus_service.hybrid_search()（dense + BM25 + RRF）
-          → [filter_chunks → rerank_chunks]（multi_doc 路径）
-            → relevance_filter（LLM 二次过滤）
-              → generate_answer（图文模式时查 chunk_image）
-                → check_quality → finalize_metrics
+  → query_rewrite → query_classify → retrieval_strategy
+    → [single_doc / multi_doc] retrieve
+      → filter → rerank → relevance_filter（LLM）
+        → generate_answer → quality_check → metrics
 ```
 
-### 4. 切片编辑后重新向量化
+### 4. 删除联动
 
 ```
-POST /chunks/job/{job_id}/upsert
-  → 读 knowledge_chunk（current content）
-  → embed → upsert Milvus（覆盖旧向量）
-  → mark_vectorized
+DELETE /files（file_id）
+  → 查 OSS 图片 key → 删 OSS 图片
+  → 删 Milvus 向量（by job_id）
+  → 删 PG knowledge_file（CASCADE 删 job/chunk/origin/image）
 ```
 
 ---
 
 ## chunk_id 设计
 
-- 格式：`{job_id}_{chunk_index}`（job_id 为 UUID）
-- 同时作为 PG `knowledge_chunk.id` 主键和 Milvus `chunk_id` 主键
-- 图文模式：parse_pdf/parse_word 阶段生成，should_merge 后序号可能有空洞
-- 图片查询：通过 `knowledge_chunk.chunk_index` 查出真实 `chunk_id`，再查 `knowledge_chunk_image`
+- 格式：**纯 UUID**（`gen_random_uuid()`）
+- PG `knowledge_chunk.id` 和 Milvus `chunk_id` 均为 UUID
+- 定位切片用 `job_id + chunk_index` 组合查询，不依赖 chunk_id 编码位置信息
+- 图文模式：`doc_image_parser` 在切分阶段为每个 chunk 生成 UUID，图片记录的 `chunk_id` 直接引用
+
+---
+
+## 元数据字段（metadata_fields）
+
+创建知识库时可配置元数据字段，存储在 `knowledge_base.metadata_fields`：
+
+```json
+[{"key": "title", "type": "text", "fulltext": true, "index": false, "auto_inject": "filename_prefix"}]
+```
+
+- `fulltext: true`：在 Milvus schema 中显式声明该字段并开启 `enable_match=True`（倒排索引）
+- `auto_inject: "filename_prefix"`：切分时自动将文件名前缀注入到每个 chunk 的 metadata
+- upsert 时 fulltext 字段值拼接到 `content` 前面，BM25 和 dense embedding 均感知
+
+---
+
+## Embedding 配置
+
+- 支持模型：`text-embedding-v3`（64/128/256/512/768/1024 维）、`text-embedding-v4`（1536/2048 维）
+- 每个知识库独立配置 `embedding_model` + `vector_dim`，upsert 时按 kb 配置调用，并校验返回维度
+- 全局默认值由 `.env` 的 `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` 控制
+
+---
+
+## API 路由
+
+| 路径 | 说明 |
+|------|------|
+| `POST /api/v1/chat/` | 普通对话（Supervisor Agent） |
+| `POST /api/v1/knowledge/` | RAG 问答 |
+| `GET/POST /api/v1/admin/collections` | 知识库管理 |
+| `POST /api/v1/documents/upload` | 单文件上传到知识库 |
+| `POST /api/v1/documents/upload-to-category` | 上传文件到类目（OSS） |
+| `POST /api/v1/documents/start-chunking/{category_id}` | 触发类目批量切分 |
+| `POST /api/v1/documents/search` | 切片检索（支持 keyword_filter + hybrid） |
+| `GET /api/v1/jobs` | 任务列表（需 kb_name） |
+| `POST /api/v1/jobs/{job_id}/upsert` | 手动触发向量化 |
+| `GET /api/v1/chunks/job/{job_id}` | 查看切片 |
+| `POST /api/v1/chunks/job/{job_id}/upsert` | 切片向量化 |
+| `GET /api/v1/files` | 文件列表（需 kb_name） |
+| `DELETE /api/v1/files` | 删除文件（body: file_id） |
+| `GET /api/v1/categories` | 类目列表 |
+| `GET /api/v1/health` | 健康检查 |
 
 ---
 
@@ -192,8 +270,22 @@ POST /chunks/job/{job_id}/upsert
 
 ---
 
-## 配置管理
+## 常见问题
 
-所有配置通过 `app/core/config.py` 的 `Settings` 类读取环境变量，启动时 `_validate_env()` 校验必填项。
+**Q: Milvus 启动慢？**
+首次启动需 30-60 秒初始化 etcd 和 MinIO，等 `docker-compose ps` 显示 healthy 再启后端。
 
-必填项：`DASHSCOPE_API_KEY`, `OSS_BUCKET`, `OSS_ACCESS_KEY_*`, `PG_HOST`, `PG_USER`, `PG_PASSWORD`, `MILVUS_HOST`
+**Q: embedding 报 Model access denied？**
+检查 `DASHSCOPE_API_KEY` 是否开通了对应 embedding 模型的权限。
+
+**Q: 向量维度不匹配？**
+知识库创建时的 `vector_dim` 必须与 embedding 模型实际输出维度一致。已有 collection 需删除重建。
+
+**Q: 图文模式支持哪些格式？**
+仅 `.pdf` 和 `.docx`。标准模式支持 `.pdf`、`.doc`、`.docx`、`.txt`、`.md`、`.ppt`、`.pptx`。
+
+**Q: 切分后 job 状态停在 chunked？**
+正常，切分和向量化已解耦。在文件列表页选中文件点"上传向量库"手动触发。
+
+**Q: Attu 端口冲突？**
+`docker-compose.yml` 中 attu 映射的是宿主机 `8080:3000`，后端用 `8000`，不冲突。

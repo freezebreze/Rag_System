@@ -6,7 +6,7 @@ from app.models.requests import ChatRequest
 from app.models.responses import ChatResponse
 from app.services.chat_service import invoke_chat
 
-router = APIRouter()
+router = APIRouter(prefix="/chat")
 
 
 @router.post("/", response_model=ChatResponse, summary="Chat with Supervisor Agent")

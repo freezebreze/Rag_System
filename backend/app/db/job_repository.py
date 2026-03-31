@@ -78,7 +78,7 @@ class JobRepository(BaseRepository):
 
     def mark_vectorized(self, job_id: str):
         self._execute_sql(
-            "UPDATE knowledge_job SET vectorized = TRUE, status = 'done', updated_at = NOW() WHERE id = %s",
+            "UPDATE knowledge_job SET vectorized = TRUE, status = 'done', progress = 100, updated_at = NOW() WHERE id = %s",
             (job_id,),
         )
 

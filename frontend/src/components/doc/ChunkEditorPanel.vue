@@ -8,7 +8,7 @@
         <el-tag v-if="editedCount > 0" type="warning" style="margin-left:8px">已编辑 {{ editedCount }} 个</el-tag>
       </div>
       <div style="display:flex;gap:8px">
-        <el-button size="small" @click="load" :loading="loading">刷新</el-button>
+        <el-button v-if="!props.readonly" size="small" @click="load" :loading="loading">刷新</el-button>
         <template v-if="!props.readonly">
           <el-button size="small" @click="fetchChunks" :loading="fetching">重新获取切片</el-button>
           <el-button size="small" type="warning" @click="cleanAll" :loading="cleaningAll">批量清洗</el-button>
@@ -557,7 +557,7 @@ const upsert = async () => {
 
 onMounted(async () => {
   await load()
-  if (!props.imageMode && chunks.value.length === 0) {
+  if (!props.readonly && !props.imageMode && chunks.value.length === 0) {
     await fetchChunks()
   }
 })

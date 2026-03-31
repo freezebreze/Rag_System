@@ -181,7 +181,7 @@ const handleSearch = async () => {
 onMounted(async () => {
   try {
     const [colRes, healthRes] = await Promise.allSettled([
-      axios.get(`${API}/admin/collection/list`),
+      axios.get(`${API}/admin/collections`),
       axios.get(`${API}/health`),
     ])
     if (colRes.status === 'fulfilled') {

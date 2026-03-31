@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """知识库管理 API（原 collection）"""
-from typing import Optional
+from typing import Optional, List
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -12,6 +12,14 @@ from app.core.exceptions import NotFoundError, ConflictError
 router = APIRouter(prefix="/collections", tags=["admin-collections"])
 
 
+class MetadataFieldConfig(BaseModel):
+    key: str
+    type: str = "text"
+    fulltext: bool = False
+    index: bool = False
+    auto_inject: Optional[str] = None
+
+
 class CreateKbRequest(BaseModel):
     name: str
     display_name: Optional[str] = None
@@ -19,6 +27,7 @@ class CreateKbRequest(BaseModel):
     image_mode: bool = False
     embedding_model: str = "text-embedding-v3"
     vector_dim: int = 1536
+    metadata_fields: Optional[List[MetadataFieldConfig]] = None
 
 
 class UpdateKbRequest(BaseModel):
@@ -39,11 +48,14 @@ async def create_collection(req: CreateKbRequest):
     if kb_repo.get_by_name(req.name):
         raise ConflictError(f"知识库「{req.name}」已存在")
 
-    # 在 Milvus 中创建 collection
+    mf = [f.model_dump() for f in req.metadata_fields] if req.metadata_fields else []
+
+    # 在 Milvus 中创建 collection（传入 metadata_fields 以建倒排索引）
     get_milvus_service().get_or_create_collection(
         collection_name=req.name,
         dim=req.vector_dim,
         image_mode=req.image_mode,
+        metadata_fields=mf,
     )
 
     # 在 PG 中记录配置
@@ -54,6 +66,7 @@ async def create_collection(req: CreateKbRequest):
         image_mode=req.image_mode,
         embedding_model=req.embedding_model,
         vector_dim=req.vector_dim,
+        metadata_fields=mf,
     )
     return JSONResponse(content={"success": True, "message": f"知识库「{req.name}」创建成功", "data": kb})
 
@@ -87,6 +100,12 @@ async def delete_collection(kb_name: str):
     kb = kb_repo.get_by_name(kb_name)
     if not kb:
         raise NotFoundError(f"知识库「{kb_name}」不存在")
+
+    # 检查是否有文件
+    from app.db import get_file_repository
+    files = get_file_repository().list_by_kb(kb["id"], limit=1)
+    if files:
+        raise ConflictError(f"知识库「{kb_name}」中还有文件，请先删除所有文件后再删除知识库")
 
     # 删除 Milvus collection
     try:

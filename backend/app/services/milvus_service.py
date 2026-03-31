@@ -13,6 +13,7 @@ from pymilvus import (
     FunctionType,
     AnnSearchRequest,
     RRFRanker,
+    WeightedRanker,
 )
 
 from app.core.config import settings
@@ -38,14 +39,18 @@ class MilvusService:
         collection_name: str,
         dim: int = 1536,
         image_mode: bool = False,
+        metadata_fields: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
-        """幂等建 collection，schema 含 dense + BM25 + 业务字段"""
+        """幂等建 collection。
+        metadata_fields: [{"key": "title", "type": "text", "fulltext": True, "index": False}, ...]
+        fulltext=True 的字段会显式加入 schema 并开启 enable_match，支持 TEXT_MATCH 关键词检索。
+        """
         if self.client.has_collection(collection_name):
             logger.info(f"Collection 已存在: {collection_name}")
             return
 
         schema = MilvusClient.create_schema(enable_dynamic_field=True)
-        schema.add_field("chunk_id",    DataType.VARCHAR, max_length=256, is_primary=True)
+        schema.add_field("chunk_id",    DataType.VARCHAR, max_length=36, is_primary=True)
         schema.add_field("job_id",      DataType.VARCHAR, max_length=128)
         schema.add_field("file_name",   DataType.VARCHAR, max_length=512)
         schema.add_field("chunk_index", DataType.INT64)
@@ -57,6 +62,21 @@ class MilvusService:
         )
         schema.add_field("sparse_bm25", DataType.SPARSE_FLOAT_VECTOR)
         schema.add_field("dense",       DataType.FLOAT_VECTOR, dim=dim)
+
+        # 用户自定义元数据字段：fulltext=True 的显式加入 schema 并开启倒排索引
+        fulltext_fields = []
+        for mf in (metadata_fields or []):
+            if mf.get("fulltext") and mf.get("key"):
+                key = mf["key"]
+                schema.add_field(
+                    key, DataType.VARCHAR, max_length=1024,
+                    enable_analyzer=True,
+                    analyzer_params=_ANALYZER_PARAMS,
+                    enable_match=True,
+                    nullable=True,
+                )
+                fulltext_fields.append(key)
+                logger.info(f"[Milvus] 元数据字段 '{key}' 已加入 schema（enable_match=True）")
 
         schema.add_function(Function(
             name="bm25",
@@ -104,30 +124,65 @@ class MilvusService:
         self,
         collection_name: str,
         chunks: List[Dict[str, Any]],
+        vector_dim: Optional[int] = None,
+        embedding_model: Optional[str] = None,
+        metadata_fields: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """
         批量 upsert 切片到 Milvus。
-        chunks: [{"chunk_id", "job_id", "file_name", "chunk_index", "content", "metadata"}, ...]
-        内部调用 EmbeddingService 生成 dense 向量。
+        metadata_fields: kb 的元数据字段配置，fulltext=True 的字段值会拼接到 content 前面参与 BM25 和 dense 检索。
         """
         if not chunks:
             return {"upsert_count": 0}
 
+        # 找出需要拼接到 content 的 fulltext 字段
+        fulltext_keys = [
+            mf["key"] for mf in (metadata_fields or [])
+            if mf.get("fulltext") and mf.get("key")
+        ]
+
         embedding_svc = get_embedding_service()
-        texts = [c["content"] for c in chunks]
-        vectors = embedding_svc.embed_texts(texts)
+        # 临时切换模型（如果 kb 指定了不同模型）
+        original_model = embedding_svc.model
+        if embedding_model and embedding_model != original_model:
+            embedding_svc.model = embedding_model
+
+        try:
+            texts = []
+            for c in chunks:
+                content = c["content"]
+                if fulltext_keys:
+                    meta = c.get("metadata") or {}
+                    prefix_parts = [
+                        f"{k}：{meta[k]}" for k in fulltext_keys
+                        if meta.get(k)
+                    ]
+                    if prefix_parts:
+                        content = "\n".join(prefix_parts) + "\n\n" + content
+                texts.append(content)
+            vectors = embedding_svc.embed_texts(texts, dimension=vector_dim)
+        finally:
+            embedding_svc.model = original_model  # 还原
 
         if len(vectors) != len(chunks):
             raise RuntimeError(f"Embedding 数量不匹配: {len(vectors)} vs {len(chunks)}")
 
+        # 校验维度
+        if vectors and vector_dim and len(vectors[0]) != vector_dim:
+            raise RuntimeError(
+                f"向量维度不匹配：collection 期望 {vector_dim} 维，"
+                f"embedding 实际返回 {len(vectors[0])} 维。"
+                f"请检查知识库的 embedding 模型和维度配置。"
+            )
+
         data = []
-        for chunk, vec in zip(chunks, vectors):
+        for chunk, vec, indexed_content in zip(chunks, vectors, texts):
             row: Dict[str, Any] = {
                 "chunk_id":    chunk["chunk_id"],
                 "job_id":      chunk.get("job_id", ""),
                 "file_name":   chunk.get("file_name", ""),
                 "chunk_index": int(chunk.get("chunk_index", 0)),
-                "content":     chunk["content"],
+                "content":     indexed_content,  # 拼接了 fulltext 字段的版本，BM25 和 dense 都基于此
                 "dense":       vec,
             }
             for k, v in (chunk.get("metadata") or {}).items():
@@ -177,29 +232,48 @@ class MilvusService:
 
     # ── 检索 ──────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _build_text_match_filter(keywords: str, base_filter: Optional[str] = None) -> str:
+        """把关键词字符串构建成 TEXT_MATCH filter，多词之间 OR 逻辑"""
+        text_match = f"TEXT_MATCH(content, '{keywords}')"
+        if base_filter:
+            return f"({base_filter}) and {text_match}"
+        return text_match
+
     def hybrid_search(
         self,
         collection_name: str,
         query: str,
         top_k: int = 10,
         filter_expr: Optional[str] = None,
+        ranker: str = "RRF",
+        hybrid_alpha: float = 0.5,
+        keyword_filter: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Dense + BM25 混合检索，RRF 融合排序"""
+        """Dense + BM25 双路混合检索。
+        keyword_filter: 若传入，先用 TEXT_MATCH 倒排索引预过滤候选集，再做双路 ANN。
+        ranker: 'RRF'（默认）或 'Weight'（hybrid_alpha 控制 dense 权重）。
+        """
         if not self.client.has_collection(collection_name):
             logger.warning(f"[Milvus] collection 不存在: {collection_name}")
             return []
 
+        # 构建最终 filter：TEXT_MATCH 预过滤 + 可选的标量过滤
+        if keyword_filter:
+            final_filter = self._build_text_match_filter(keyword_filter, filter_expr)
+        else:
+            final_filter = filter_expr
+
         query_vector = get_embedding_service().embed_query(query)
 
-        # AnnSearchRequest 用 expr 参数（不是 filter）
         dense_kwargs: Dict[str, Any] = {
             "data": [query_vector],
             "anns_field": "dense",
             "param": {"metric_type": "IP", "params": {"ef": 100}},
             "limit": top_k,
         }
-        if filter_expr:
-            dense_kwargs["expr"] = filter_expr
+        if final_filter:
+            dense_kwargs["expr"] = final_filter
 
         bm25_kwargs: Dict[str, Any] = {
             "data": [query],
@@ -207,8 +281,14 @@ class MilvusService:
             "param": {"metric_type": "BM25", "params": {"drop_ratio_search": 0.2}},
             "limit": top_k,
         }
-        if filter_expr:
-            bm25_kwargs["expr"] = filter_expr
+        if final_filter:
+            bm25_kwargs["expr"] = final_filter
+
+        if ranker == "Weight":
+            sparse_weight = round(1.0 - hybrid_alpha, 2)
+            reranker = WeightedRanker(hybrid_alpha, sparse_weight)
+        else:
+            reranker = RRFRanker(k=60)
 
         output_fields = ["chunk_id", "job_id", "file_name", "chunk_index", "content"]
 
@@ -216,7 +296,7 @@ class MilvusService:
             results = self.client.hybrid_search(
                 collection_name=collection_name,
                 reqs=[AnnSearchRequest(**dense_kwargs), AnnSearchRequest(**bm25_kwargs)],
-                ranker=RRFRanker(k=60),
+                ranker=reranker,
                 limit=top_k,
                 output_fields=output_fields,
             )
@@ -234,13 +314,15 @@ class MilvusService:
                 "chunk_index": entity.get("chunk_index", 0),
                 "content":     entity.get("content", ""),
                 "score":       hit.get("distance", 0.0),
+                "retrieval_source": 3,  # hybrid
                 "metadata":    {
                     k: v for k, v in entity.items()
                     if k not in ("chunk_id", "job_id", "file_name", "chunk_index", "content")
                 },
             })
 
-        logger.info(f"[Milvus] hybrid_search 返回 {len(hits)} 条")
+        mode = f"keyword_filter+hybrid" if keyword_filter else "hybrid"
+        logger.info(f"[Milvus] {mode} 返回 {len(hits)} 条 (collection={collection_name})")
         return hits
 
     def vector_search(

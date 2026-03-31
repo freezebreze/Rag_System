@@ -22,10 +22,13 @@ _TABLES = [
         image_mode      BOOLEAN NOT NULL DEFAULT FALSE,
         embedding_model TEXT NOT NULL DEFAULT 'text-embedding-v3',
         vector_dim      INTEGER NOT NULL DEFAULT 1536,
+        metadata_fields JSONB NOT NULL DEFAULT '[]',
         created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
+    # 已存在的表补列（幂等）
+    "ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS metadata_fields JSONB NOT NULL DEFAULT '[]'",
 
     # 2. 类目（独立体系，和知识库无关）
     """
@@ -76,7 +79,7 @@ _TABLES = [
     CREATE TABLE IF NOT EXISTS knowledge_job (
         id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         file_id     UUID NOT NULL REFERENCES knowledge_file(id) ON DELETE CASCADE,
-        kb_id       UUID NOT NULL REFERENCES knowledge_base(id),
+        kb_id       UUID NOT NULL REFERENCES knowledge_base(id) ON DELETE CASCADE,
         status      TEXT NOT NULL DEFAULT 'pending',
         stage       TEXT,
         progress    INTEGER NOT NULL DEFAULT 0,
@@ -94,7 +97,7 @@ _TABLES = [
     # 6. 切片（当前内容）
     """
     CREATE TABLE IF NOT EXISTS knowledge_chunk (
-        id          TEXT PRIMARY KEY,
+        id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         job_id      UUID NOT NULL REFERENCES knowledge_job(id) ON DELETE CASCADE,
         chunk_index INTEGER NOT NULL,
         content     TEXT NOT NULL,
@@ -110,7 +113,7 @@ _TABLES = [
     # 7. 切片原始内容（只写一次，用于撤回）
     """
     CREATE TABLE IF NOT EXISTS knowledge_chunk_origin (
-        chunk_id TEXT PRIMARY KEY REFERENCES knowledge_chunk(id) ON DELETE CASCADE,
+        chunk_id UUID PRIMARY KEY REFERENCES knowledge_chunk(id) ON DELETE CASCADE,
         content  TEXT NOT NULL
     )
     """,
@@ -119,7 +122,7 @@ _TABLES = [
     """
     CREATE TABLE IF NOT EXISTS knowledge_chunk_image (
         id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        chunk_id    TEXT NOT NULL REFERENCES knowledge_chunk(id) ON DELETE CASCADE,
+        chunk_id    UUID NOT NULL REFERENCES knowledge_chunk(id) ON DELETE CASCADE,
         placeholder TEXT NOT NULL,
         oss_key     TEXT NOT NULL,
         page        INTEGER,

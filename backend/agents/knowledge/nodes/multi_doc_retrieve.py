@@ -34,7 +34,8 @@ def multi_doc_retrieve(state: KnowledgeAgentState) -> KnowledgeAgentState:
     try:
         query = state["query"]
         retrieval_strategy = state.get("retrieval_strategy", RetrievalStrategy.HYBRID)
-        collection = (state.get("config") or {}) and getattr(state.get("config"), "collection", None)
+        _cfg = state.get("config")
+        collection = _cfg.collection if _cfg else None
 
         logger.info(f"[MultiDocRetrieve] 开始多文档检索: {query}")
         logger.info(f"[MultiDocRetrieve] 检索策略: {retrieval_strategy.value}")

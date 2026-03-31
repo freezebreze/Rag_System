@@ -46,43 +46,39 @@
       <el-table-column prop="file_name" label="文件名" min-width="200" show-overflow-tooltip />
       <el-table-column label="切分状态" width="110" align="center">
         <template #default="{ row }">
-          <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
+          <el-tag :type="statusType(row.job?.status)" size="small">{{ statusLabel(row.job?.status) }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="向量化" width="110" align="center">
         <template #default="{ row }">
           <el-tag
-            :type="row.vectorized && (row.status || '').toLowerCase() === 'success' ? 'success' : row.vectorized ? 'warning' : 'info'"
+            :type="row.job?.vectorized ? 'success' : 'info'"
             size="small"
           >
-            {{ row.vectorized && (row.status || '').toLowerCase() === 'success' ? '已上传' : row.vectorized ? '向量化中' : '未上传' }}
+            {{ row.job?.vectorized ? '已上传' : '未上传' }}
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="stage" label="阶段" width="90" align="center" show-overflow-tooltip />
+      <el-table-column prop="job.stage" label="阶段" width="90" align="center" show-overflow-tooltip />
       <el-table-column label="进度" width="70" align="center">
         <template #default="{ row }">
-          <span v-if="row.process != null">{{ row.process }}%</span>
+          <span v-if="row.job?.progress != null">{{ row.job.progress }}%</span>
           <span v-else>-</span>
         </template>
       </el-table-column>
       <el-table-column prop="created_at" label="上传时间" width="155" show-overflow-tooltip />
       <el-table-column label="操作" width="160" align="center" fixed="right">
         <template #default="{ row }">
-          <template v-if="row.vectorized && (row.status || '').toLowerCase() !== 'success'">
-            <!-- 直接入库中：ADB 还在处理，置灰 -->
+          <!-- 向量化进行中 -->
+          <template v-if="(row.job?.status || '').toLowerCase() === 'embedding'">
             <el-button size="small" type="primary" link disabled>向量化中...</el-button>
           </template>
           <template v-else>
             <el-button
-              v-if="(row.status || '').toLowerCase() === 'success'"
-              size="small"
-              type="primary"
-              link
+              v-if="['done', 'chunked'].includes((row.job?.status || '').toLowerCase())"
+              size="small" type="primary" link
               @click="viewChunks(row)"
-            >
-              查看切片
-            </el-button>
+            >查看切片</el-button>
             <el-popconfirm
               :title="`确认删除「${row.file_name}」？将同时清除切片和向量数据`"
               confirm-button-text="删除" cancel-button-text="取消"
@@ -120,18 +116,19 @@ const selectedJobIds = ref([])
 const batchDeleting = ref(false)
 const upserting = ref(false)
 
-// 可上传：status=Success 且未 vectorized
+// 可上传：status=chunked 且未 vectorized
 const uploadableJobIds = computed(() =>
   pendingFiles.value
-    .filter(f => (f.status || '').toLowerCase() === 'success' && !f.vectorized)
-    .map(f => f.job_id)
+    .filter(f => (f.job?.status || '').toLowerCase() === 'chunked' && !f.job?.vectorized)
+    .map(f => f.job?.id)
+    .filter(Boolean)
 )
 
 const pendingFiles = computed(() =>
-  files.value.filter(f => !f.vectorized)
+  files.value.filter(f => !f.job?.vectorized)
 )
 const vectorizedFiles = computed(() =>
-  files.value.filter(f => f.vectorized)
+  files.value.filter(f => f.job?.vectorized)
 )
 const activeFiles = computed(() =>
   activeTab.value === 'pending' ? pendingFiles.value : vectorizedFiles.value
@@ -139,22 +136,22 @@ const activeFiles = computed(() =>
 
 const statusType = (s) => {
   const lower = (s || '').toLowerCase()
-  if (lower === 'success') return 'success'
-  if (['failed', 'error'].includes(lower)) return 'danger'
-  if (['running', 'start', 'pending'].includes(lower)) return 'warning'
+  if (['done', 'chunked'].includes(lower)) return 'success'
+  if (['error', 'failed'].includes(lower)) return 'danger'
+  if (['chunking', 'embedding', 'pending'].includes(lower)) return 'warning'
   return 'info'
 }
 
 const statusLabel = (s) => ({
-  Success: '已完成', Failed: '失败', Running: '处理中',
-  Pending: '等待中', Start: '开始', Cancelled: '已取消', Cancelling: '取消中',
-}[s] || s || '-')
+  done: '已完成', chunked: '已切分', chunking: '切分中',
+  embedding: '向量化中', pending: '等待中', error: '失败',
+}[(s || '').toLowerCase()] || s || '-')
 
 const load = async () => {
   loading.value = true
   selectedJobIds.value = []
   try {
-    const res = await docApi.listFiles({ collection: props.collection || '' })
+    const res = await docApi.listFiles({ kb_name: props.collection || '' })
     files.value = res.data.data.files || []
   } catch (e) {
     ElMessage.error('加载失败: ' + (e.response?.data?.detail || e.message))
@@ -164,15 +161,18 @@ const load = async () => {
 }
 
 const viewChunks = (row) => {
-  emit('view-chunks', row.job_id, row.vectorized)
+  emit('view-chunks', row.job?.id, row.job?.vectorized)
 }
 
+const selectedFileIds = ref([])
+
 const onSelectionChange = (rows) => {
-  selectedJobIds.value = rows.map(r => r.job_id)
+  selectedFileIds.value = rows.map(r => r.id)
+  selectedJobIds.value = rows.map(r => r.job?.id).filter(Boolean)
 }
 
 const batchDelete = async () => {
-  const count = selectedJobIds.value.length
+  const count = selectedFileIds.value.length
   try {
     await ElMessageBox.confirm(
       `确认删除选中的 ${count} 个文件？将同时清除切片和向量数据。`,
@@ -182,7 +182,7 @@ const batchDelete = async () => {
   } catch { return }
   batchDeleting.value = true
   try {
-    const res = await docApi.batchDeleteFiles(selectedJobIds.value, props.collection)
+    const res = await docApi.batchDeleteFiles(selectedFileIds.value, props.collection)
     ElMessage.success(res.data.message)
     await load()
   } catch (e) {
@@ -213,7 +213,7 @@ const batchUpsert = async (jobIds) => {
 
 const deleteFile = async (row) => {
   try {
-    await docApi.deleteFile(row.job_id, props.collection)
+    await docApi.deleteFile(row.id)
     ElMessage.success(`「${row.file_name}」已删除`)
     await load()
   } catch (e) {

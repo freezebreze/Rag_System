@@ -21,14 +21,17 @@ class KbRepository(BaseRepository):
         image_mode: bool = False,
         embedding_model: str = "text-embedding-v3",
         vector_dim: int = 1536,
+        metadata_fields: Optional[list] = None,
     ) -> Dict[str, Any]:
+        import json
         rows = self._execute_returning(
             """
-            INSERT INTO knowledge_base(name, display_name, description, image_mode, embedding_model, vector_dim)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO knowledge_base(name, display_name, description, image_mode, embedding_model, vector_dim, metadata_fields)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             RETURNING *
             """,
-            (name, display_name or name, description, image_mode, embedding_model, vector_dim),
+            (name, display_name or name, description, image_mode, embedding_model, vector_dim,
+             json.dumps(metadata_fields or [])),
         )
         return self._normalize(rows[0]) if rows else {}
 
@@ -83,6 +86,13 @@ class KbRepository(BaseRepository):
 
     @staticmethod
     def _normalize(row: Dict[str, Any]) -> Dict[str, Any]:
+        import json
+        mf = row.get("metadata_fields")
+        if isinstance(mf, str):
+            try:
+                mf = json.loads(mf)
+            except Exception:
+                mf = []
         return {
             "id": str(row["id"]),
             "name": row["name"],
@@ -91,6 +101,7 @@ class KbRepository(BaseRepository):
             "image_mode": bool(row.get("image_mode", False)),
             "embedding_model": row.get("embedding_model", "text-embedding-v3"),
             "vector_dim": row.get("vector_dim", 1536),
+            "metadata_fields": mf or [],
             "created_at": str(row["created_at"]) if row.get("created_at") else None,
             "updated_at": str(row["updated_at"]) if row.get("updated_at") else None,
         }

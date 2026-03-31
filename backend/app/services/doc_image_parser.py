@@ -180,19 +180,21 @@ def parse_pdf(
     overlap_buf = ""
     first_page = None
 
-    def _chunk_id():
-        # 临时 id，后处理会重新分配
-        return f"{file_base}_{chunk_idx}"
+    def _new_chunk_id():
+        return str(uuid.uuid4())
+
+    current_chunk_id = _new_chunk_id()
 
     def _seal():
-        nonlocal buffer, text_len, chunk_idx, img_sort, overlap_buf, first_page
+        nonlocal buffer, text_len, chunk_idx, img_sort, overlap_buf, first_page, current_chunk_id
         if buffer.strip():
             chunks.append({
-                "chunk_id": _chunk_id(),
+                "chunk_id": current_chunk_id,
+                "chunk_index": chunk_idx,
                 "content": buffer,
                 "metadata": {
                     "page": first_page,
-                    "chunk_id": _chunk_id(),
+                    "chunk_id": current_chunk_id,
                     "prev_chunk_id": None,
                     "next_chunk_id": None,
                 },
@@ -204,6 +206,7 @@ def parse_pdf(
         buffer = ""
         text_len = 0
         first_page = None
+        current_chunk_id = _new_chunk_id()
 
     for elem in elements:
         if elem["type"] == "text":
@@ -236,8 +239,6 @@ def parse_pdf(
                 text_len = len(overlap_buf)
                 overlap_buf = ""
 
-            # chunk_idx 已确定，现在上传
-            current_chunk_id = _chunk_id()
             try:
                 oss_key = _upload_image(
                     elem["img_bytes"], elem["ext"],
@@ -263,11 +264,12 @@ def parse_pdf(
 
     if buffer.strip():
         chunks.append({
-            "chunk_id": _chunk_id(),
+            "chunk_id": current_chunk_id,
+            "chunk_index": chunk_idx,
             "content": buffer,
             "metadata": {
                 "page": first_page,
-                "chunk_id": _chunk_id(),
+                "chunk_id": current_chunk_id,
                 "prev_chunk_id": None,
                 "next_chunk_id": None,
             },
@@ -311,18 +313,21 @@ def parse_word(
     overlap_buf = ""
     bound_rids: set = set()
 
-    def _chunk_id():
-        return f"{file_base}_{chunk_idx}"
+    def _new_chunk_id():
+        return str(uuid.uuid4())
+
+    current_chunk_id = _new_chunk_id()
 
     def _seal():
-        nonlocal buffer, text_len, chunk_idx, img_sort, overlap_buf
+        nonlocal buffer, text_len, chunk_idx, img_sort, overlap_buf, current_chunk_id
         if buffer.strip():
             chunks.append({
-                "chunk_id": _chunk_id(),
+                "chunk_id": current_chunk_id,
+                "chunk_index": chunk_idx,
                 "content": buffer,
                 "metadata": {
                     "page": None,
-                    "chunk_id": _chunk_id(),
+                    "chunk_id": current_chunk_id,
                     "prev_chunk_id": None,
                     "next_chunk_id": None,
                 },
@@ -333,6 +338,7 @@ def parse_word(
         img_sort = 0
         buffer = ""
         text_len = 0
+        current_chunk_id = _new_chunk_id()
 
     def _insert_image(r_id: str):
         nonlocal img_sort, buffer
@@ -345,12 +351,12 @@ def parse_word(
                 return
             ct = img_part.content_type
             ext = ct.split("/")[-1].replace("jpeg", "jpg")
-            oss_key = _upload_image(img_bytes, ext, collection, file_name, _chunk_id())
+            oss_key = _upload_image(img_bytes, ext, collection, file_name, current_chunk_id)
             placeholder = f"<<IMAGE:{uuid.uuid4().hex[:8]}>>"
             buffer += placeholder
             image_records.append({
                 "id": str(uuid.uuid4()),
-                "chunk_id": _chunk_id(),
+                "chunk_id": current_chunk_id,
                 "job_id": job_id,
                 "placeholder": placeholder,
                 "oss_key": oss_key,
@@ -359,7 +365,7 @@ def parse_word(
             })
             bound_rids.add(r_id)
             img_sort += 1
-            logger.info(f"[WordParser] 图片插入 chunk {_chunk_id()} rId={r_id}")
+            logger.info(f"[WordParser] 图片插入 chunk {current_chunk_id} rId={r_id}")
         except Exception as e:
             logger.warning(f"[WordParser] 图片提取失败 rId={r_id}: {e}")
 
@@ -402,11 +408,12 @@ def parse_word(
 
     if buffer.strip():
         chunks.append({
-            "chunk_id": _chunk_id(),
+            "chunk_id": current_chunk_id,
+            "chunk_index": chunk_idx,
             "content": buffer,
             "metadata": {
                 "page": None,
-                "chunk_id": _chunk_id(),
+                "chunk_id": current_chunk_id,
                 "prev_chunk_id": None,
                 "next_chunk_id": None,
             },

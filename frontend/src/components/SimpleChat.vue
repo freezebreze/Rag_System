@@ -16,9 +16,9 @@
           <div class="collection-select-wrap">
             <el-icon class="col-icon"><data-analysis /></el-icon>
             <el-select v-model="selectedCollection" size="small" placeholder="选择知识库"
-              style="width:180px" clearable @change="clearMessages">
-              <el-option v-for="col in collections" :key="col.collection_name"
-                :label="col.collection_name" :value="col.collection_name" />
+              style="width:180px" @change="clearMessages">
+              <el-option v-for="col in collections" :key="col.name"
+                :label="col.display_name || col.name" :value="col.name" />
             </el-select>
           </div>
           <span v-if="collections.length === 0" class="no-kb-hint">暂无知识库</span>
@@ -244,9 +244,9 @@ const uniqueFileNames = (sources) => {
 
 onMounted(async () => {
   try {
-    const { data } = await axios.get(`${API}/admin/collection/list`)
+    const { data } = await axios.get(`${API}/admin/collections`)
     collections.value = data.data?.collections || []
-    if (collections.value.length > 0) selectedCollection.value = collections.value[0].collection_name
+    if (collections.value.length > 0) selectedCollection.value = collections.value[0].name
   } catch {}
 })
 defineExpose({ clearMessages })

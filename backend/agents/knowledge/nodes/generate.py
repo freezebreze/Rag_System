@@ -92,11 +92,10 @@ def generate_answer(state: KnowledgeAgentState, config=None) -> Dict[str, Any]:
                 chunk_ids = []
                 for chunk in reranked_chunks:
                     if isinstance(chunk, dict):
-                        meta = chunk.get("metadata") or {}
-                        cid = meta.get("chunk_id") or chunk.get("id")
+                        # hybrid_search 返回的字典主键是 "chunk_id"
+                        cid = chunk.get("chunk_id") or chunk.get("id")
                     else:
-                        meta = getattr(chunk, "metadata", {}) or {}
-                        cid = meta.get("chunk_id") or getattr(chunk, "chunk_id", None)
+                        cid = getattr(chunk, "chunk_id", None)
                     if cid:
                         chunk_ids.append(cid)
                 if chunk_ids:

@@ -259,6 +259,9 @@ def search_documents(
     kb_name: str,
     top_k: int = 10,
     filter_expr: Optional[str] = None,
+    ranker: str = "RRF",
+    hybrid_alpha: float = 0.5,
+    keyword_filter: Optional[str] = None,
 ) -> list:
     from app.services.milvus_service import get_milvus_service
     return get_milvus_service().hybrid_search(
@@ -266,6 +269,9 @@ def search_documents(
         query=query,
         top_k=top_k,
         filter_expr=filter_expr,
+        ranker=ranker,
+        hybrid_alpha=hybrid_alpha,
+        keyword_filter=keyword_filter or None,
     )
 
 

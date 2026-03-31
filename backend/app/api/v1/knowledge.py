@@ -6,7 +6,7 @@ from app.models.requests import KnowledgeRequest
 from app.models.responses import KnowledgeResponse
 from app.services.knowledge_service import invoke_knowledge_qa
 
-router = APIRouter()
+router = APIRouter(prefix="/knowledge")
 
 
 @router.post("/", response_model=KnowledgeResponse, summary="Knowledge Base Q&A")
