@@ -21,6 +21,16 @@ def query_classify(state: KnowledgeAgentState) -> dict:
 
     try:
         query = state["query"]
+        _cfg = state.get("config")
+
+        # 用户显式指定多文档，跳过 LLM 判断
+        if _cfg and _cfg.force_multi_doc is True:
+            logger.info("[QueryClassify] 用户强制多文档，跳过 LLM 分类")
+            return {
+                "query_type": "multi_doc",
+                "processing_log": [{"stage": "query_classify", "duration_ms": 0, "query_type": "multi_doc", "reason": "force_multi_doc"}],
+            }
+
         logger.info(f"[QueryClassify] 开始分类问题: {query}")
 
         messages = [

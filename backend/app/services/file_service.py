@@ -66,6 +66,21 @@ def delete_file(file_id: str) -> str:
             logger.warning("OSS 图片删除失败（继续）", extra={"error": str(e)})
 
     # 4. PG 级联删除（knowledge_file → knowledge_job → knowledge_chunk → knowledge_chunk_image）
+    # 如果关联了 __default__ 类目文件记录，一并清理
+    category_file_id = file_record.get("category_file_id")
+    if category_file_id:
+        try:
+            from app.db import get_category_file_repository, get_category_repository
+            cat_file_repo = get_category_file_repository()
+            cat_file = cat_file_repo.get_by_id(category_file_id)
+            if cat_file:
+                cat_repo = get_category_repository()
+                cat = cat_repo.get(cat_file["category_id"])
+                if cat and cat["name"] == "__default__":
+                    cat_file_repo.delete(category_file_id)
+        except Exception as e:
+            logger.warning(f"清理 __default__ 类目文件记录失败（继续）: {e}")
+
     file_repo.delete(file_id)
 
     logger.info(f"文件已删除: {file_name}")

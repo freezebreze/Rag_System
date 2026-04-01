@@ -3,7 +3,7 @@
 from typing import Optional, List
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.db import get_kb_repository
 from app.services.milvus_service import get_milvus_service
@@ -20,6 +20,16 @@ class MetadataFieldConfig(BaseModel):
     auto_inject: Optional[str] = None
 
 
+class RetrievalConfig(BaseModel):
+    ranker: str = "RRF"                  # "RRF" | "Weight"
+    rrf_k: int = 60                      # RRFRanker k 参数（内部使用，不暴露前端）
+    hybrid_alpha: float = 0.5            # WeightedRanker dense 权重
+    multi_doc_top_k: int = 20            # 多文档：返回组数
+    multi_doc_group_size: int = 3        # 多文档：每组 chunk 数
+    strict_group_size: bool = False      # 多文档：是否严格凑满 group_size
+    single_doc_top_k: int = 20          # 单文档：返回 chunk 数
+
+
 class CreateKbRequest(BaseModel):
     name: str
     display_name: Optional[str] = None
@@ -28,12 +38,14 @@ class CreateKbRequest(BaseModel):
     embedding_model: str = "text-embedding-v3"
     vector_dim: int = 1536
     metadata_fields: Optional[List[MetadataFieldConfig]] = None
+    retrieval_config: Optional[RetrievalConfig] = None
 
 
 class UpdateKbRequest(BaseModel):
     display_name: Optional[str] = None
     description: Optional[str] = None
     image_mode: Optional[bool] = None
+    retrieval_config: Optional[RetrievalConfig] = None
 
 
 @router.get("")
@@ -49,6 +61,7 @@ async def create_collection(req: CreateKbRequest):
         raise ConflictError(f"知识库「{req.name}」已存在")
 
     mf = [f.model_dump() for f in req.metadata_fields] if req.metadata_fields else []
+    rc = req.retrieval_config.model_dump() if req.retrieval_config else {}
 
     # 在 Milvus 中创建 collection（传入 metadata_fields 以建倒排索引）
     get_milvus_service().get_or_create_collection(
@@ -67,6 +80,7 @@ async def create_collection(req: CreateKbRequest):
         embedding_model=req.embedding_model,
         vector_dim=req.vector_dim,
         metadata_fields=mf,
+        retrieval_config=rc,
     )
     return JSONResponse(content={"success": True, "message": f"知识库「{req.name}」创建成功", "data": kb})
 
@@ -90,6 +104,7 @@ async def update_collection(kb_name: str, req: UpdateKbRequest):
         display_name=req.display_name,
         description=req.description,
         image_mode=req.image_mode,
+        retrieval_config=req.retrieval_config.model_dump() if req.retrieval_config else None,
     )
     return JSONResponse(content={"success": True, "data": updated})
 

@@ -206,6 +206,16 @@
           show-icon
           :title="`已提交 ${chunkResult.submitted} 个，跳过 ${chunkResult.skipped?.length || 0} 个${chunkResult.errors?.length ? `，${chunkResult.errors.length} 个失败` : ''}`"
         />
+        <div v-if="chunkResult?.skipped?.length" style="margin-top:8px">
+          <el-alert type="warning" :closable="false" show-icon
+            title="以下文件已存在于知识库，已跳过。如需更新，请先在文件列表删除旧版本后重新切分：" />
+          <div style="margin-top:6px;display:flex;flex-direction:column;gap:4px">
+            <el-tag
+              v-for="s in chunkResult.skipped" :key="s.file_name"
+              type="warning" size="small" style="width:fit-content"
+            >{{ s.file_name }}</el-tag>
+          </div>
+        </div>
       </el-card>
     </el-tab-pane>
 

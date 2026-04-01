@@ -37,8 +37,17 @@ def multi_doc_retrieve(state: KnowledgeAgentState) -> KnowledgeAgentState:
         _cfg = state.get("config")
         collection = _cfg.collection if _cfg else None
 
+        # 从 RAGConfig 读检索参数（已由 knowledge_service 从 kb retrieval_config 注入）
+        ranker         = _cfg.ranker              if _cfg else "RRF"
+        rrf_k          = _cfg.rrf_k               if _cfg else 60
+        hybrid_alpha   = _cfg.hybrid_alpha         if _cfg else 0.5
+        top_k          = _cfg.multi_doc_top_k      if _cfg else 20
+        group_size     = _cfg.multi_doc_group_size if _cfg else 3
+        strict_group   = _cfg.strict_group_size    if _cfg else False
+        keyword_filter = _cfg.keyword_filter       if _cfg else None
+
         logger.info(f"[MultiDocRetrieve] 开始多文档检索: {query}")
-        logger.info(f"[MultiDocRetrieve] 检索策略: {retrieval_strategy.value}")
+        logger.info(f"[MultiDocRetrieve] 检索策略: {retrieval_strategy.value}, ranker={ranker}, top_k={top_k}, group_size={group_size}")
         print(f"\n[MultiDocRetrieve] query={query}, strategy={retrieval_strategy}")
         
         # 获取检索服务
@@ -49,22 +58,38 @@ def multi_doc_retrieve(state: KnowledgeAgentState) -> KnowledgeAgentState:
             logger.info("[MultiDocRetrieve] 使用关键词检索")
             chunks = retrieval_service.keyword_search(
                 query=query,
-                top_k=50,
+                top_k=top_k,
                 collection=collection,
+                keyword_filter=keyword_filter,
+                ranker=ranker,
+                rrf_k=rrf_k,
+                hybrid_alpha=hybrid_alpha,
             )
         elif retrieval_strategy == RetrievalStrategy.HYBRID:
-            logger.info("[MultiDocRetrieve] 使用混合检索（广撒网，后续 filter/rerank node 处理）")
+            logger.info("[MultiDocRetrieve] 使用混合检索（分组搜索，按 file_name 保证多文档多样性）")
             chunks = retrieval_service.hybrid_search(
                 query=query,
-                top_k=50,
+                top_k=top_k,
                 collection=collection,
+                group_by_field="file_name",
+                group_size=group_size,
+                strict_group_size=strict_group,
+                ranker=ranker,
+                rrf_k=rrf_k,
+                hybrid_alpha=hybrid_alpha,
             )
         else:
             logger.warning(f"[MultiDocRetrieve] 未知策略 {retrieval_strategy}, 使用混合检索")
             chunks = retrieval_service.hybrid_search(
                 query=query,
-                top_k=50,
+                top_k=top_k,
                 collection=collection,
+                group_by_field="file_name",
+                group_size=group_size,
+                strict_group_size=strict_group,
+                ranker=ranker,
+                rrf_k=rrf_k,
+                hybrid_alpha=hybrid_alpha,
             )
         
         duration = (datetime.now() - start_time).total_seconds() * 1000

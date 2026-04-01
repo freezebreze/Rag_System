@@ -29,6 +29,7 @@ _TABLES = [
     """,
     # 已存在的表补列（幂等）
     "ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS metadata_fields JSONB NOT NULL DEFAULT '[]'",
+    "ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS retrieval_config JSONB NOT NULL DEFAULT '{}'",
 
     # 2. 类目（独立体系，和知识库无关）
     """
@@ -151,6 +152,16 @@ def init_db() -> None:
         except Exception as e:
             logger.error(f"建表失败: {e}\nSQL: {sql[:120]}")
             raise
+
+    # 幂等创建 __default__ 类目（单文件直传使用，对用户不可见）
+    try:
+        execute_sql(
+            "INSERT INTO knowledge_category(name, description) VALUES ('__default__', '系统默认类目，单文件直传使用') "
+            "ON CONFLICT (name) DO NOTHING"
+        )
+    except Exception as e:
+        logger.warning(f"创建 __default__ 类目失败（可忽略）: {e}")
+
     logger.info("数据库表初始化完成")
 
 

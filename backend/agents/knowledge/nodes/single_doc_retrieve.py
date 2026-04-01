@@ -38,8 +38,15 @@ def single_doc_retrieve(state: KnowledgeAgentState) -> KnowledgeAgentState:
         _cfg = state.get("config")
         collection = _cfg.collection if _cfg else None
 
+        # 从 RAGConfig 读检索参数
+        ranker       = _cfg.ranker          if _cfg else "RRF"
+        rrf_k        = _cfg.rrf_k           if _cfg else 60
+        hybrid_alpha = _cfg.hybrid_alpha     if _cfg else 0.5
+        top_k        = _cfg.single_doc_top_k if _cfg else 20
+        keyword_filter = _cfg.keyword_filter if _cfg else None
+
         logger.info(f"[SingleDocRetrieve] 开始单文档检索: {query}")
-        logger.info(f"[SingleDocRetrieve] 检索策略: {retrieval_strategy.value}, collection={collection}")
+        logger.info(f"[SingleDocRetrieve] 检索策略: {retrieval_strategy.value}, collection={collection}, ranker={ranker}, top_k={top_k}")
         
         # 获取检索服务
         retrieval_service = get_retrieval_service()
@@ -49,22 +56,32 @@ def single_doc_retrieve(state: KnowledgeAgentState) -> KnowledgeAgentState:
             logger.info("[SingleDocRetrieve] 使用关键词检索")
             chunks = retrieval_service.keyword_search(
                 query=query,
-                top_k=20,
+                top_k=top_k,
                 collection=collection,
+                keyword_filter=keyword_filter,
+                ranker=ranker,
+                rrf_k=rrf_k,
+                hybrid_alpha=hybrid_alpha,
             )
         elif retrieval_strategy == RetrievalStrategy.HYBRID:
             logger.info("[SingleDocRetrieve] 使用混合检索")
             chunks = retrieval_service.hybrid_search(
                 query=query,
-                top_k=20,
+                top_k=top_k,
                 collection=collection,
+                ranker=ranker,
+                rrf_k=rrf_k,
+                hybrid_alpha=hybrid_alpha,
             )
         else:
             logger.warning(f"[SingleDocRetrieve] 未知策略 {retrieval_strategy}, 使用混合检索")
             chunks = retrieval_service.hybrid_search(
                 query=query,
-                top_k=20,
+                top_k=top_k,
                 collection=collection,
+                ranker=ranker,
+                rrf_k=rrf_k,
+                hybrid_alpha=hybrid_alpha,
             )
         
         duration = (datetime.now() - start_time).total_seconds() * 1000

@@ -9,7 +9,7 @@ from typing import Optional
 
 from fastapi import BackgroundTasks
 
-from app.core.exceptions import NotFoundError, ValidationError, ExternalServiceError
+from app.core.exceptions import NotFoundError, ValidationError, ExternalServiceError, ConflictError
 from app.services.oss_service import get_oss_service
 from app.db import (
     get_kb_repository,
@@ -61,29 +61,51 @@ async def upload_document(
     """
     单文件上传入口：
     1. 校验文件
-    2. 上传 OSS（kb/{kb_name}/{file_name}）
-    3. 写 knowledge_file + knowledge_job(pending)
-    4. 触发后台任务（切分 + 向量化）
-    5. 立即返回 job_id
+    2. 检查同名文件是否已存在，存在则拒绝（要求用户先删除旧版本）
+    3. 上传 OSS（kb/{kb_name}/{file_name}）
+    4. 关联到 __default__ 类目，写 knowledge_category_file
+    5. 写 knowledge_file + knowledge_job(pending)
+    6. 触发后台任务（切分）
+    7. 立即返回 job_id
     """
     validate_file(file_name, len(file_content))
     kb = _get_kb_or_raise(kb_name)
 
     oss_key = f"kb/{kb_name}/{file_name}"
+    file_repo = get_file_repository()
+
+    # 同名文件检查：拒绝覆盖，要求用户手动删除旧版本
+    existing = file_repo.get_by_kb_and_oss_key(kb["id"], oss_key)
+    if existing:
+        raise ConflictError(
+            f"文件「{file_name}」已存在于知识库「{kb_name}」，请先在文件列表删除旧版本后重新上传"
+        )
+
+    # 上传 OSS
     try:
         get_oss_service().upload_bytes(oss_key, file_content)
     except Exception as e:
         raise ExternalServiceError(f"OSS 上传失败: {e}") from e
 
-    file_repo = get_file_repository()
-    existing = file_repo.get_by_kb_and_oss_key(kb["id"], oss_key)
-    if existing:
-        file_repo.delete(existing["id"])
+    # 关联到 __default__ 类目
+    from app.services.category_service import get_or_create_default_category
+    default_cat = get_or_create_default_category()
+    cat_file_repo = get_category_file_repository()
+    # __default__ 类目下同名文件幂等处理（理论上不会出现，但防御一下）
+    existing_cat_file = cat_file_repo.get_by_category_and_filename(default_cat["id"], file_name)
+    if existing_cat_file:
+        cat_file_repo.delete(existing_cat_file["id"])
+    cat_file_record = cat_file_repo.create(
+        category_id=default_cat["id"],
+        file_name=file_name,
+        oss_key=oss_key,
+    )
 
     file_record = file_repo.create(
         kb_id=kb["id"],
         file_name=file_name,
         oss_key=oss_key,
+        category_file_id=cat_file_record["id"],
         file_size=len(file_content),
         mime_type=_guess_mime(file_name),
         status="pending",
@@ -182,7 +204,7 @@ async def start_chunking(
 
     file_repo = get_file_repository()
     job_repo = get_job_repository()
-    submitted, errors = [], []
+    submitted, skipped, errors = [], [], []
 
     for f in all_files:
         file_name = f["file_name"]
@@ -190,7 +212,9 @@ async def start_chunking(
         try:
             existing = file_repo.get_by_kb_and_oss_key(kb["id"], oss_key)
             if existing:
-                file_repo.delete(existing["id"])
+                skipped.append({"file_name": file_name, "reason": "已存在，请先删除旧版本"})
+                logger.info(f"[start_chunking] 跳过已存在文件: {file_name}")
+                continue
 
             file_record = file_repo.create(
                 kb_id=kb["id"],
@@ -220,7 +244,7 @@ async def start_chunking(
             logger.error(f"[start_chunking] {file_name} 提交失败: {e}")
             errors.append({"file_name": file_name, "error": str(e)})
 
-    return {"submitted": len(submitted), "files": submitted, "errors": errors}
+    return {"submitted": len(submitted), "files": submitted, "skipped": skipped, "errors": errors}
 
 
 # ── 后台流水线（转发给 job_service）──────────────────────────────────────────

@@ -22,16 +22,17 @@ class KbRepository(BaseRepository):
         embedding_model: str = "text-embedding-v3",
         vector_dim: int = 1536,
         metadata_fields: Optional[list] = None,
+        retrieval_config: Optional[dict] = None,
     ) -> Dict[str, Any]:
         import json
         rows = self._execute_returning(
             """
-            INSERT INTO knowledge_base(name, display_name, description, image_mode, embedding_model, vector_dim, metadata_fields)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO knowledge_base(name, display_name, description, image_mode, embedding_model, vector_dim, metadata_fields, retrieval_config)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING *
             """,
             (name, display_name or name, description, image_mode, embedding_model, vector_dim,
-             json.dumps(metadata_fields or [])),
+             json.dumps(metadata_fields or []), json.dumps(retrieval_config or {})),
         )
         return self._normalize(rows[0]) if rows else {}
 
@@ -62,7 +63,9 @@ class KbRepository(BaseRepository):
         image_mode: Optional[bool] = None,
         embedding_model: Optional[str] = None,
         vector_dim: Optional[int] = None,
+        retrieval_config: Optional[dict] = None,
     ) -> Optional[Dict[str, Any]]:
+        import json
         parts, params = [], []
         if display_name is not None:
             parts.append("display_name = %s"); params.append(display_name)
@@ -74,6 +77,8 @@ class KbRepository(BaseRepository):
             parts.append("embedding_model = %s"); params.append(embedding_model)
         if vector_dim is not None:
             parts.append("vector_dim = %s"); params.append(vector_dim)
+        if retrieval_config is not None:
+            parts.append("retrieval_config = %s"); params.append(json.dumps(retrieval_config))
         if not parts:
             return self.get_by_id(kb_id)
         parts.append("updated_at = NOW()")
@@ -93,6 +98,12 @@ class KbRepository(BaseRepository):
                 mf = json.loads(mf)
             except Exception:
                 mf = []
+        rc = row.get("retrieval_config")
+        if isinstance(rc, str):
+            try:
+                rc = json.loads(rc)
+            except Exception:
+                rc = {}
         return {
             "id": str(row["id"]),
             "name": row["name"],
@@ -102,6 +113,7 @@ class KbRepository(BaseRepository):
             "embedding_model": row.get("embedding_model", "text-embedding-v3"),
             "vector_dim": row.get("vector_dim", 1536),
             "metadata_fields": mf or [],
+            "retrieval_config": rc or {},
             "created_at": str(row["created_at"]) if row.get("created_at") else None,
             "updated_at": str(row["updated_at"]) if row.get("updated_at") else None,
         }

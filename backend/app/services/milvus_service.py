@@ -247,12 +247,19 @@ class MilvusService:
         top_k: int = 10,
         filter_expr: Optional[str] = None,
         ranker: str = "RRF",
+        rrf_k: int = 60,
         hybrid_alpha: float = 0.5,
         keyword_filter: Optional[str] = None,
+        group_by_field: Optional[str] = None,
+        group_size: int = 1,
+        strict_group_size: bool = False,
     ) -> List[Dict[str, Any]]:
         """Dense + BM25 双路混合检索。
         keyword_filter: 若传入，先用 TEXT_MATCH 倒排索引预过滤候选集，再做双路 ANN。
         ranker: 'RRF'（默认）或 'Weight'（hybrid_alpha 控制 dense 权重）。
+        group_by_field: 分组字段（如 'file_name'），用于多文档场景保证结果多样性。
+        group_size: 每组返回的 chunk 数量，默认 1。
+        strict_group_size: 是否严格按 group_size 返回，默认 False。
         """
         if not self.client.has_collection(collection_name):
             logger.warning(f"[Milvus] collection 不存在: {collection_name}")
@@ -288,18 +295,24 @@ class MilvusService:
             sparse_weight = round(1.0 - hybrid_alpha, 2)
             reranker = WeightedRanker(hybrid_alpha, sparse_weight)
         else:
-            reranker = RRFRanker(k=60)
+            reranker = RRFRanker(k=rrf_k)
 
         output_fields = ["chunk_id", "job_id", "file_name", "chunk_index", "content"]
 
+        search_kwargs: Dict[str, Any] = {
+            "collection_name": collection_name,
+            "reqs": [AnnSearchRequest(**dense_kwargs), AnnSearchRequest(**bm25_kwargs)],
+            "ranker": reranker,
+            "limit": top_k,
+            "output_fields": output_fields,
+        }
+        if group_by_field:
+            search_kwargs["group_by_field"] = group_by_field
+            search_kwargs["group_size"] = group_size
+            search_kwargs["strict_group_size"] = strict_group_size
+
         try:
-            results = self.client.hybrid_search(
-                collection_name=collection_name,
-                reqs=[AnnSearchRequest(**dense_kwargs), AnnSearchRequest(**bm25_kwargs)],
-                ranker=reranker,
-                limit=top_k,
-                output_fields=output_fields,
-            )
+            results = self.client.hybrid_search(**search_kwargs)
         except Exception as e:
             logger.error(f"[Milvus] hybrid_search 失败: {e}")
             raise

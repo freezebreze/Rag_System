@@ -64,9 +64,10 @@
                 <span>{{ formatMetaFields(row.metadata_fields) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="120" fixed="right">
+            <el-table-column label="操作" width="180" fixed="right">
               <template #default="{ row }">
                 <el-button type="primary" size="small" plain @click="enterCollection(row)">管理</el-button>
+                <el-button type="warning" size="small" plain style="margin-left:4px" @click="openRetrievalDialog(row)">配置</el-button>
                 <el-popconfirm
                   :title="`确认删除知识库「${row.name}」？`"
                   confirm-button-text="删除" cancel-button-text="取消"
@@ -81,6 +82,44 @@
             </el-table-column>
           </el-table>
         </el-card>
+
+        <!-- 检索配置 dialog -->
+        <el-dialog v-model="retrievalDialogVisible" :title="`检索配置 — ${retrievalTarget?.name}`" width="520px" destroy-on-close>
+          <el-form :model="retrievalForm" label-width="160px">
+            <el-form-item label="Rerank 策略">
+              <el-radio-group v-model="retrievalForm.ranker">
+                <el-radio value="RRF">RRF（倒数排名融合）</el-radio>
+                <el-radio value="Weight">Weighted（加权）</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="Dense 权重 (α)">
+              <el-slider v-model="retrievalForm.hybrid_alpha" :min="0" :max="1" :step="0.05"
+                :disabled="retrievalForm.ranker !== 'Weight'" show-input :input-size="'small'" style="width:280px" />
+              <div class="tip">仅 Weighted 策略生效，Sparse 权重 = 1 - α</div>
+            </el-form-item>
+            <el-divider content-position="left">多文档检索</el-divider>
+            <el-form-item label="返回文档数">
+              <el-input-number v-model="retrievalForm.multi_doc_top_k" :min="1" :max="100" style="width:120px" />
+              <div class="tip">最多返回多少个不同文档的结果</div>
+            </el-form-item>
+            <el-form-item label="每文档 Chunk 数">
+              <el-input-number v-model="retrievalForm.multi_doc_group_size" :min="1" :max="10" style="width:120px" />
+              <div class="tip">每个文档最多取几个最相关 chunk</div>
+            </el-form-item>
+            <el-form-item label="严格 Chunk 数">
+              <el-switch v-model="retrievalForm.strict_group_size" active-text="开启" inactive-text="关闭" />
+              <div class="tip">开启后强制凑满每文档 chunk 数，可能影响性能</div>
+            </el-form-item>
+            <el-divider content-position="left">单文档检索</el-divider>
+            <el-form-item label="返回 Chunk 数">
+              <el-input-number v-model="retrievalForm.single_doc_top_k" :min="1" :max="100" style="width:120px" />
+            </el-form-item>
+          </el-form>
+          <template #footer>
+            <el-button @click="retrievalDialogVisible = false">取消</el-button>
+            <el-button type="primary" @click="saveRetrievalConfig" :loading="retrievalSaving">保存</el-button>
+          </template>
+        </el-dialog>
       </el-tab-pane>
 
       <!-- 创建知识库 -->
@@ -173,6 +212,31 @@
             <el-form-item label="启用图文模式">
               <el-switch v-model="colForm.image_mode" active-text="开启" inactive-text="关闭" />
               <div class="tip">开启后上传文件将使用自定义 PDF 解析，提取图片并与切片关联，回答时可展示图片</div>
+            </el-form-item>
+
+            <el-divider content-position="left">检索配置</el-divider>
+            <el-form-item label="Rerank 策略">
+              <el-radio-group v-model="colForm.retrieval_config.ranker">
+                <el-radio value="RRF">RRF（倒数排名融合）</el-radio>
+                <el-radio value="Weight">Weighted（加权）</el-radio>
+              </el-radio-group>
+            </el-form-item>
+            <el-form-item label="Dense 权重 (α)">
+              <el-slider v-model="colForm.retrieval_config.hybrid_alpha" :min="0" :max="1" :step="0.05"
+                :disabled="colForm.retrieval_config.ranker !== 'Weight'" show-input :input-size="'small'" style="width:280px" />
+              <div class="tip">仅 Weighted 策略生效，Sparse 权重 = 1 - α</div>
+            </el-form-item>
+            <el-form-item label="多文档：返回文档数">
+              <el-input-number v-model="colForm.retrieval_config.multi_doc_top_k" :min="1" :max="100" style="width:120px" />
+            </el-form-item>
+            <el-form-item label="多文档：每文档 Chunk 数">
+              <el-input-number v-model="colForm.retrieval_config.multi_doc_group_size" :min="1" :max="10" style="width:120px" />
+            </el-form-item>
+            <el-form-item label="多文档：严格 Chunk 数">
+              <el-switch v-model="colForm.retrieval_config.strict_group_size" active-text="开启" inactive-text="关闭" />
+            </el-form-item>
+            <el-form-item label="单文档：返回 Chunk 数">
+              <el-input-number v-model="colForm.retrieval_config.single_doc_top_k" :min="1" :max="100" style="width:120px" />
             </el-form-item>
 
             <el-form-item>
@@ -319,6 +383,14 @@ const defaultColForm = () => ({
   hnsw_m: null, hnsw_ef_construction: null,
   pq_enable_bool: false, external_storage_bool: false,
   image_mode: false,
+  retrieval_config: {
+    ranker: 'RRF',
+    hybrid_alpha: 0.5,
+    multi_doc_top_k: 20,
+    multi_doc_group_size: 3,
+    strict_group_size: false,
+    single_doc_top_k: 20,
+  },
 })
 const colForm = ref(defaultColForm())
 
@@ -360,6 +432,7 @@ const createCollection = async () => {
       embedding_model: colForm.value.embedding_model || 'text-embedding-v3',
       vector_dim: colForm.value.dimension || 1024,
       metadata_fields: enabledFields,
+      retrieval_config: colForm.value.retrieval_config,
     }
     const { data } = await axios.post(`${API}/admin/collections`, payload)
     if (data.success) {
@@ -376,6 +449,47 @@ const createCollection = async () => {
 const resetColForm = () => {
   colForm.value = defaultColForm()
   PRESET_FIELDS.forEach(f => { f.enabled = false; f.fulltext = f.key === 'title'; f.index = false })
+}
+
+// ── 检索配置 dialog ───────────────────────────────────────────────────────────
+const retrievalDialogVisible = ref(false)
+const retrievalTarget = ref(null)
+const retrievalSaving = ref(false)
+const defaultRetrievalForm = () => ({
+  ranker: 'RRF', hybrid_alpha: 0.5,
+  multi_doc_top_k: 20, multi_doc_group_size: 3, strict_group_size: false,
+  single_doc_top_k: 20,
+})
+const retrievalForm = ref(defaultRetrievalForm())
+
+const openRetrievalDialog = (row) => {
+  retrievalTarget.value = row
+  const rc = row.retrieval_config || {}
+  retrievalForm.value = {
+    ranker:                rc.ranker               ?? 'RRF',
+    hybrid_alpha:          rc.hybrid_alpha          ?? 0.5,
+    multi_doc_top_k:       rc.multi_doc_top_k       ?? 20,
+    multi_doc_group_size:  rc.multi_doc_group_size  ?? 3,
+    strict_group_size:     rc.strict_group_size     ?? false,
+    single_doc_top_k:      rc.single_doc_top_k      ?? 20,
+  }
+  retrievalDialogVisible.value = true
+}
+
+const saveRetrievalConfig = async () => {
+  retrievalSaving.value = true
+  try {
+    const { data } = await axios.put(`${API}/admin/collections/${retrievalTarget.value.name}`, {
+      retrieval_config: retrievalForm.value,
+    })
+    if (data.success) {
+      ElMessage.success('检索配置已保存')
+      retrievalDialogVisible.value = false
+      await loadCollections()
+    }
+  } catch (e) {
+    ElMessage.error('保存失败: ' + (e.response?.data?.detail || e.message))
+  } finally { retrievalSaving.value = false }
 }
 
 onMounted(async () => {

@@ -20,6 +20,8 @@ def invoke_knowledge_qa(
     session_id: str,
     collection: Optional[str] = None,
     messages: Optional[list] = None,
+    force_multi_doc: Optional[bool] = None,
+    keyword_filter: Optional[str] = None,
 ) -> dict:
     """
     调用 Knowledge Agent 执行 RAG 问答。
@@ -32,6 +34,17 @@ def invoke_knowledge_qa(
     agent = get_knowledge_agent()
 
     request_id = str(uuid.uuid4())
+
+    # 读取 kb 的 retrieval_config 注入到 RAGConfig
+    rc = {}
+    if collection:
+        try:
+            from app.db import get_kb_repository
+            kb = get_kb_repository().get_by_name(collection)
+            if kb:
+                rc = kb.get("retrieval_config") or {}
+        except Exception as e:
+            logger.warning(f"读取 kb retrieval_config 失败，使用默认值: {e}")
 
     lc_messages = None
     if messages:
@@ -55,6 +68,17 @@ def invoke_knowledge_qa(
             enable_citations=True,
             enable_fallback=True,
             collection=collection or None,
+            # 从 kb retrieval_config 注入，缺省用 RAGConfig 默认值
+            ranker=rc.get("ranker", "RRF"),
+            rrf_k=rc.get("rrf_k", 60),
+            hybrid_alpha=rc.get("hybrid_alpha", 0.5),
+            multi_doc_top_k=rc.get("multi_doc_top_k", 20),
+            multi_doc_group_size=rc.get("multi_doc_group_size", 3),
+            strict_group_size=rc.get("strict_group_size", False),
+            single_doc_top_k=rc.get("single_doc_top_k", 20),
+            # 用户请求级覆盖（优先级高于 kb 配置）
+            force_multi_doc=force_multi_doc,
+            keyword_filter=keyword_filter,
         ),
         messages=lc_messages,
     )

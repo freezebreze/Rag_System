@@ -19,6 +19,8 @@ async def knowledge_qa(request: KnowledgeRequest):
         session_id=request.session_id,
         collection=request.collection or None,
         messages=request.messages or None,
+        force_multi_doc=request.force_multi_doc,
+        keyword_filter=request.keyword_filter or None,
     )
     return KnowledgeResponse(
         status_code=200,

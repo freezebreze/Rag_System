@@ -12,8 +12,24 @@ from app.services.oss_service import get_oss_service
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_CATEGORY_NAME = "__default__"
+
+
+def get_or_create_default_category() -> dict:
+    """获取或创建系统默认类目（单文件直传使用）"""
+    repo = get_category_repository()
+    cat = repo.get_by_name(DEFAULT_CATEGORY_NAME)
+    if not cat:
+        cat = repo.create(name=DEFAULT_CATEGORY_NAME, description="系统默认类目，单文件直传使用")
+    return cat
+
+
 def list_categories() -> dict:
-    categories = get_category_repository().list_all()
+    """列出所有类目，过滤掉系统内部的 __default__ 类目"""
+    categories = [
+        c for c in get_category_repository().list_all()
+        if c["name"] != DEFAULT_CATEGORY_NAME
+    ]
     return {"categories": categories, "total": len(categories)}
 
 
@@ -40,8 +56,11 @@ def update_category(category_id: str, name: Optional[str], description: Optional
 def delete_category(category_id: str) -> None:
     cat_repo = get_category_repository()
     cat_file_repo = get_category_file_repository()
-    if not cat_repo.get(category_id):
+    cat = cat_repo.get(category_id)
+    if not cat:
         raise NotFoundError("类目不存在")
+    if cat["name"] == DEFAULT_CATEGORY_NAME:
+        raise ValidationError("系统默认类目不可删除")
     count = cat_file_repo.count_by_category(category_id)
     if count > 0:
         raise ValidationError(f"类目下还有 {count} 个文件，请先删除文件")

@@ -129,6 +129,21 @@ class RAGConfig:
     enable_rerank: bool = True
     rerank_top_k: int = 3
     rerank_model: Optional[str] = None
+    ranker: str = "RRF"              # "RRF" | "Weight"
+    rrf_k: int = 60
+    hybrid_alpha: float = 0.5
+
+    # Multi-doc retrieval (grouping search)
+    multi_doc_top_k: int = 20
+    multi_doc_group_size: int = 3
+    strict_group_size: bool = False
+
+    # Single-doc retrieval
+    single_doc_top_k: int = 20
+
+    # User overrides (from request)
+    force_multi_doc: Optional[bool] = None   # True=跳过 LLM 分类，直接 multi_doc
+    keyword_filter: Optional[str] = None     # 有值=跳过策略判断，直接 KEYWORD_ONLY + TEXT_MATCH
     
     # Generation settings
     enable_citations: bool = True

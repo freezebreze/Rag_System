@@ -17,6 +17,9 @@ class RetrievalService:
         top_k: int = 10,
         filter_expr: Optional[str] = None,
         collection: Optional[str] = None,
+        ranker: str = "RRF",
+        rrf_k: int = 60,
+        hybrid_alpha: float = 0.5,
     ) -> List[dict]:
         """Dense + BM25 双路混合检索（主要入口）"""
         if not collection:
@@ -27,6 +30,9 @@ class RetrievalService:
             query=query,
             top_k=top_k,
             filter_expr=filter_expr,
+            ranker=ranker,
+            rrf_k=rrf_k,
+            hybrid_alpha=hybrid_alpha,
         )
 
     def keyword_search(
@@ -36,14 +42,14 @@ class RetrievalService:
         filter_expr: Optional[str] = None,
         collection: Optional[str] = None,
         keyword_filter: Optional[str] = None,
+        ranker: str = "RRF",
+        rrf_k: int = 60,
+        hybrid_alpha: float = 0.5,
     ) -> List[dict]:
-        """TEXT_MATCH 倒排索引预过滤 + Dense + BM25 双路混合检索。
-        keyword_filter 为空时退化为普通 hybrid_search。
-        """
+        """TEXT_MATCH 倒排索引预过滤 + Dense + BM25 双路混合检索。"""
         if not collection:
             logger.warning("[Retrieval] collection 未指定，跳过检索")
             return []
-        # 未指定关键词时用 query 本身作为关键词过滤
         kw = keyword_filter or query
         return get_milvus_service().hybrid_search(
             collection_name=collection,
@@ -51,6 +57,9 @@ class RetrievalService:
             top_k=top_k,
             filter_expr=filter_expr,
             keyword_filter=kw,
+            ranker=ranker,
+            rrf_k=rrf_k,
+            hybrid_alpha=hybrid_alpha,
         )
 
     def hybrid_search(
@@ -59,9 +68,29 @@ class RetrievalService:
         top_k: int = 10,
         filter_expr: Optional[str] = None,
         collection: Optional[str] = None,
+        group_by_field: Optional[str] = None,
+        group_size: int = 1,
+        strict_group_size: bool = False,
+        ranker: str = "RRF",
+        rrf_k: int = 60,
+        hybrid_alpha: float = 0.5,
     ) -> List[dict]:
-        """纯双路混合检索（同 vector_search）"""
-        return self.vector_search(query=query, top_k=top_k, filter_expr=filter_expr, collection=collection)
+        """纯双路混合检索，支持分组搜索"""
+        if not collection:
+            logger.warning("[Retrieval] collection 未指定，跳过检索")
+            return []
+        return get_milvus_service().hybrid_search(
+            collection_name=collection,
+            query=query,
+            top_k=top_k,
+            filter_expr=filter_expr,
+            group_by_field=group_by_field,
+            group_size=group_size,
+            strict_group_size=strict_group_size,
+            ranker=ranker,
+            rrf_k=rrf_k,
+            hybrid_alpha=hybrid_alpha,
+        )
 
 
 _retrieval_service = None

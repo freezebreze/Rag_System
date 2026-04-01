@@ -22,6 +22,52 @@
             </el-select>
           </div>
           <span v-if="collections.length === 0" class="no-kb-hint">暂无知识库</span>
+          <div class="kb-options">
+            <el-tooltip content="开启后跳过 LLM 分类，直接使用多文档分组搜索" placement="bottom" :show-after="400">
+              <button class="opt-pill" :class="{ active: forceMultiDoc }" @click="forceMultiDoc = !forceMultiDoc">
+                <span class="opt-pill-dot" />
+                <svg class="opt-pill-icon" viewBox="0 0 16 16" fill="none">
+                  <rect x="1" y="3" width="6" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/>
+                  <rect x="9" y="3" width="6" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/>
+                  <rect x="1" y="9" width="6" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/>
+                  <rect x="9" y="9" width="6" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/>
+                </svg>
+                <span>多文档</span>
+                <span class="opt-pill-glow" />
+              </button>
+            </el-tooltip>
+
+            <el-tooltip content="开启后使用关键词精确预过滤，适合错误码、型号等精确匹配场景" placement="bottom" :show-after="400">
+              <button class="opt-pill" :class="{ active: keywordFilterEnabled }" @click="toggleKeywordFilter">
+                <span class="opt-pill-dot" />
+                <svg class="opt-pill-icon" viewBox="0 0 16 16" fill="none">
+                  <circle cx="6.5" cy="6.5" r="4" stroke="currentColor" stroke-width="1.3"/>
+                  <line x1="9.5" y1="9.5" x2="14" y2="14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                  <line x1="4.5" y1="6.5" x2="8.5" y2="6.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                  <line x1="6.5" y1="4.5" x2="6.5" y2="8.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                </svg>
+                <span>关键词</span>
+                <span class="opt-pill-glow" />
+              </button>
+            </el-tooltip>
+
+            <transition name="kw-slide">
+              <div v-if="keywordFilterEnabled" class="kw-input-wrap">
+                <svg class="kw-input-icon" viewBox="0 0 16 16" fill="none">
+                  <path d="M2 4h12M4 8h8M6 12h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+                </svg>
+                <input
+                  v-model="keywordFilter"
+                  class="kw-input"
+                  placeholder="精确匹配词…"
+                  @keydown.escape="toggleKeywordFilter"
+                />
+                <button v-if="keywordFilter" class="kw-clear" @click="keywordFilter = ''">
+                  <svg viewBox="0 0 10 10" fill="none"><line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                </button>
+              </div>
+            </transition>
+          </div>
         </template>
         <div class="mode-badge" :class="chatMode">
           {{ chatMode === 'general' ? 'Multi-Agent' : 'RAG + Rerank' }}
@@ -176,6 +222,15 @@ const loading = ref(false)
 const inputFocused = ref(false)
 const messagesContainer = ref(null)
 
+// knowledge 模式选项
+const forceMultiDoc = ref(false)
+const keywordFilterEnabled = ref(false)
+const keywordFilter = ref('')
+const toggleKeywordFilter = () => {
+  keywordFilterEnabled.value = !keywordFilterEnabled.value
+  if (!keywordFilterEnabled.value) keywordFilter.value = ''
+}
+
 const modes = [
   { value: 'general',   label: '普通对话', icon: 'Cpu' },
   { value: 'knowledge', label: '知识库',   icon: 'Document' },
@@ -204,7 +259,11 @@ const sendMessage = async () => {
   scrollToBottom()
   try {
     if (chatMode.value === 'knowledge') {
-      const res = await apiService.knowledgeQA(text, props.model, 'default', selectedCollection.value || null)
+      const res = await apiService.knowledgeQA(
+        text, props.model, 'default', selectedCollection.value || null,
+        forceMultiDoc.value || null,
+        (keywordFilterEnabled.value && keywordFilter.value) ? keywordFilter.value : null,
+      )
       const imageMap = res.image_map || {}
       let raw = res.answer || '抱歉，未收到有效回复。'
       Object.entries(imageMap).forEach(([ph, url]) => { raw = raw.split(ph).join(`\n![image](${url})\n`) })
@@ -289,6 +348,107 @@ defineExpose({ clearMessages })
 .collection-select-wrap { display: flex; align-items: center; gap: 6px; }
 .col-icon { color: rgba(255,255,255,0.3); font-size: 14px; }
 .no-kb-hint { font-size: 11px; color: #f06b6b; }
+.kb-options { display: flex; align-items: center; gap: 6px; }
+
+/* ── opt-pill toggle ── */
+.opt-pill {
+  position: relative; display: flex; align-items: center; gap: 5px;
+  padding: 4px 10px 4px 8px; border-radius: 99px; border: none; cursor: pointer;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.3px;
+  color: rgba(255,255,255,0.3);
+  background: rgba(255,255,255,0.04);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+  transition: color 0.2s, background 0.2s, box-shadow 0.2s, transform 0.15s;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.opt-pill:hover {
+  color: rgba(255,255,255,0.6);
+  background: rgba(255,255,255,0.07);
+  transform: translateY(-1px);
+}
+.opt-pill:active { transform: scale(0.96); }
+
+/* 激活态 — 多文档用蓝紫渐变，关键词用青绿 */
+.opt-pill.active {
+  color: #fff;
+  background: rgba(79,142,247,0.18);
+  box-shadow: inset 0 0 0 1px rgba(79,142,247,0.5), 0 0 12px rgba(79,142,247,0.25);
+}
+.opt-pill.active .opt-pill-dot {
+  background: #7eb3ff;
+  box-shadow: 0 0 6px #7eb3ff;
+}
+/* 第二个 pill（关键词）激活用青绿 */
+.opt-pill:nth-child(2).active {
+  background: rgba(45,212,160,0.15);
+  box-shadow: inset 0 0 0 1px rgba(45,212,160,0.45), 0 0 12px rgba(45,212,160,0.2);
+}
+.opt-pill:nth-child(2).active .opt-pill-dot {
+  background: #2dd4a0;
+  box-shadow: 0 0 6px #2dd4a0;
+}
+
+/* 状态指示点 */
+.opt-pill-dot {
+  width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0;
+  background: rgba(255,255,255,0.2);
+  transition: background 0.25s, box-shadow 0.25s;
+}
+
+/* 图标 */
+.opt-pill-icon {
+  width: 12px; height: 12px; flex-shrink: 0;
+  color: currentColor; opacity: 0.8;
+}
+
+/* 扫光层 */
+.opt-pill-glow {
+  position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  background: linear-gradient(105deg, transparent 40%, rgba(255,255,255,0.07) 50%, transparent 60%);
+  background-size: 200% 100%; background-position: 200% 0;
+  transition: background-position 0s;
+}
+.opt-pill.active .opt-pill-glow {
+  animation: pill-sweep 2.5s ease-in-out infinite;
+}
+@keyframes pill-sweep {
+  0%   { background-position: 200% 0; }
+  40%  { background-position: -50% 0; }
+  100% { background-position: -50% 0; }
+}
+
+/* ── keyword input ── */
+.kw-input-wrap {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 8px 3px 10px; border-radius: 99px;
+  background: rgba(255,255,255,0.04);
+  box-shadow: inset 0 0 0 1px rgba(45,212,160,0.35), 0 0 10px rgba(45,212,160,0.1);
+  min-width: 0;
+}
+.kw-input-icon { width: 11px; height: 11px; color: #2dd4a0; flex-shrink: 0; opacity: 0.7; }
+.kw-input {
+  border: none; outline: none; background: transparent;
+  font-size: 11px; color: rgba(255,255,255,0.75); width: 130px;
+  font-family: inherit;
+}
+.kw-input::placeholder { color: rgba(255,255,255,0.2); }
+.kw-clear {
+  width: 14px; height: 14px; border-radius: 50%; border: none; cursor: pointer; flex-shrink: 0;
+  background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.35);
+  display: flex; align-items: center; justify-content: center; padding: 2px;
+  transition: background 0.15s, color 0.15s;
+}
+.kw-clear:hover { background: rgba(240,107,107,0.2); color: #f06b6b; }
+.kw-clear svg { width: 100%; height: 100%; }
+
+/* kw-slide transition */
+.kw-slide-enter-active { transition: all 0.25s cubic-bezier(0.34,1.56,0.64,1); }
+.kw-slide-leave-active { transition: all 0.18s cubic-bezier(0.4,0,1,1); }
+.kw-slide-enter-from { opacity: 0; transform: translateX(-8px) scale(0.92); max-width: 0; }
+.kw-slide-enter-to   { opacity: 1; transform: translateX(0) scale(1);      max-width: 220px; }
+.kw-slide-leave-from { opacity: 1; transform: translateX(0) scale(1);      max-width: 220px; }
+.kw-slide-leave-to   { opacity: 0; transform: translateX(-8px) scale(0.92); max-width: 0; }
 .mode-badge {
   font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: 99px;
   text-transform: uppercase; letter-spacing: 0.8px;

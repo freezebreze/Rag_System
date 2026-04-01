@@ -17,6 +17,17 @@ def determine_retrieval_strategy(state: KnowledgeAgentState) -> dict:
 
     try:
         query = state["query"]
+        _cfg = state.get("config")
+
+        # 用户指定了关键词，直接强制 KEYWORD_ONLY，跳过规则判断
+        if _cfg and _cfg.keyword_filter:
+            logger.info(f"[RetrievalStrategy] 用户指定关键词过滤: '{_cfg.keyword_filter}'，强制 KEYWORD_ONLY")
+            return {
+                "retrieval_strategy": RetrievalStrategy.KEYWORD_ONLY,
+                "retrieval_strategy_reason": f"用户指定关键词: {_cfg.keyword_filter}",
+                "processing_log": [{"stage": "retrieval_strategy", "duration_ms": 0, "strategy": RetrievalStrategy.KEYWORD_ONLY.value, "reason": "user_keyword_filter"}],
+            }
+
         logger.info(f"[RetrievalStrategy] 开始判断检索策略: {query}")
 
         error_patterns = [
