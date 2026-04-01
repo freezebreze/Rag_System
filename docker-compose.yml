@@ -30,8 +30,8 @@ services:
     image: minio/minio:RELEASE.2024-05-28T17-19-04Z
     container_name: milvus-minio
     environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY}
     ports:
       - "9005:9000"
       - "9001:9001"
@@ -81,15 +81,15 @@ services:
     image: postgres:16
     container_name: kb-postgres
     environment:
-      POSTGRES_DB: knowledge_db
-      POSTGRES_USER: kbuser
-      POSTGRES_PASSWORD: kbpass
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - ./volumes/postgres:/var/lib/postgresql/data
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U kbuser -d knowledge_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5

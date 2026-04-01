@@ -41,15 +41,15 @@ class Settings:
     # ── Milvus ────────────────────────────────────────────────────────────────
     milvus_host: str = os.getenv("MILVUS_HOST", "localhost")
     milvus_port: int = int(os.getenv("MILVUS_PORT", "19530"))
-    milvus_user: str = os.getenv("MILVUS_USER", "root")
-    milvus_password: str = os.getenv("MILVUS_PASSWORD", "Milvus")
+    milvus_user: str = os.getenv("MILVUS_USER", "")
+    milvus_password: str = os.getenv("MILVUS_PASSWORD", "")
 
     # ── PostgreSQL ────────────────────────────────────────────────────────────
     pg_host: str = os.getenv("PG_HOST", "localhost")
     pg_port: int = int(os.getenv("PG_PORT", "5432"))
-    pg_db: str = os.getenv("PG_DB", "knowledge_db")
-    pg_user: str = os.getenv("PG_USER", "kbuser")
-    pg_password: str = os.getenv("PG_PASSWORD", "kbpass")
+    pg_db: str = os.getenv("PG_DB", "")
+    pg_user: str = os.getenv("PG_USER", "")
+    pg_password: str = os.getenv("PG_PASSWORD", "")
 
     # ── Embedding ─────────────────────────────────────────────────────────────
     embedding_model: str = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
