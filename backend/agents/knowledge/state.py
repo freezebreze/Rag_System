@@ -127,8 +127,9 @@ class RAGConfig:
     
     # Reranking settings
     enable_rerank: bool = True
-    rerank_top_k: int = 3
+    rerank_top_k: int = 3          # 内部兼容字段，实际由 llm_context_top_k 控制
     rerank_model: Optional[str] = None
+    llm_context_top_k: int = 10     # 最终送给 LLM 的切片数上限（single_doc / multi_doc 统一）
     ranker: str = "RRF"              # "RRF" | "Weight"
     rrf_k: int = 60
     hybrid_alpha: float = 0.5
@@ -144,6 +145,11 @@ class RAGConfig:
     # User overrides (from request)
     force_multi_doc: Optional[bool] = None   # True=跳过 LLM 分类，直接 multi_doc
     keyword_filter: Optional[str] = None     # 有值=跳过策略判断，直接 KEYWORD_ONLY + TEXT_MATCH
+
+    # 多模态
+    kb_type: str = "standard"                # "standard" | "multimodal"
+    query_image_url: Optional[str] = None    # 用户上传的查询图片 OSS 预签名 URL
+    image_vector_dim: int = 1024             # 图片向量维度（与 kb 配置一致）
     
     # Generation settings
     enable_citations: bool = True

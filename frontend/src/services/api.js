@@ -58,20 +58,21 @@ export const apiService = {
   },
 
   // Knowledge base query
-  async knowledgeQuery(query, sessionId = 'default', model = null, collection = null, forceMultiDoc = null, keywordFilter = null) {
+  async knowledgeQuery(query, sessionId = 'default', model = null, collection = null, forceMultiDoc = null, keywordFilter = null, queryImage = null) {
     const payload = { query, session_id: sessionId }
     if (model) payload.model = model
     if (collection) payload.collection = collection
     if (forceMultiDoc != null) payload.force_multi_doc = forceMultiDoc
     if (keywordFilter) payload.keyword_filter = keywordFilter
+    if (queryImage) payload.query_image = queryImage
 
     const response = await api.post('/knowledge', payload)
     return response.data
   },
 
   // Knowledge base QA (alias for better naming)
-  async knowledgeQA(query, model = null, sessionId = 'default', collection = null, forceMultiDoc = null, keywordFilter = null) {
-    return this.knowledgeQuery(query, sessionId, model, collection, forceMultiDoc, keywordFilter)
+  async knowledgeQA(query, model = null, sessionId = 'default', collection = null, forceMultiDoc = null, keywordFilter = null, queryImage = null) {
+    return this.knowledgeQuery(query, sessionId, model, collection, forceMultiDoc, keywordFilter, queryImage)
   },
 
   // Generic API call for testing

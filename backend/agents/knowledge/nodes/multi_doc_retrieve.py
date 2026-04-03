@@ -46,6 +46,16 @@ def multi_doc_retrieve(state: KnowledgeAgentState) -> KnowledgeAgentState:
         strict_group   = _cfg.strict_group_size    if _cfg else False
         keyword_filter = _cfg.keyword_filter       if _cfg else None
 
+        # 多模态知识库走专用检索节点（分组搜索参数透传）
+        if getattr(_cfg, "kb_type", "standard") == "multimodal":
+            from .multimodal_retrieve import multimodal_retrieve
+            return multimodal_retrieve(
+                state,
+                group_by_field="file_name",
+                group_size=group_size,
+                strict_group_size=strict_group,
+            )
+
         logger.info(f"[MultiDocRetrieve] 开始多文档检索: {query}")
         logger.info(f"[MultiDocRetrieve] 检索策略: {retrieval_strategy.value}, ranker={ranker}, top_k={top_k}, group_size={group_size}")
         print(f"\n[MultiDocRetrieve] query={query}, strategy={retrieval_strategy}")

@@ -74,12 +74,13 @@ class ConversationRepository(BaseRepository):
         sources: Optional[list] = None,
         confidence: Optional[float] = None,
         image_placeholders: Optional[List[str]] = None,
+        query_image_oss_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         rows = self._execute_returning(
             """
             INSERT INTO conversation_message
-                (session_id, role, content, sources, confidence, image_placeholders)
-            VALUES (%s, %s, %s, %s, %s, %s) RETURNING *
+                (session_id, role, content, sources, confidence, image_placeholders, query_image_oss_key)
+            VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING *
             """,
             (
                 session_id,
@@ -88,6 +89,7 @@ class ConversationRepository(BaseRepository):
                 json.dumps(sources or []),
                 confidence,
                 image_placeholders or [],
+                query_image_oss_key,
             ),
         )
         return self._norm_message(rows[0]) if rows else {}
@@ -147,6 +149,7 @@ class ConversationRepository(BaseRepository):
             "sources": sources or [],
             "confidence": row.get("confidence"),
             "image_placeholders": list(phs),
+            "query_image_oss_key": row.get("query_image_oss_key"),
             "created_at": str(row["created_at"]) if row.get("created_at") else None,
         }
 

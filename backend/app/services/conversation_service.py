@@ -37,7 +37,18 @@ def delete_session(session_id: str) -> None:
     if not session:
         raise NotFoundError(f"会话不存在: {session_id}")
 
-    # 直接删除会话（CASCADE 删 conversation_message）
-    # 图片存储在 knowledge_chunk_image / OSS，生命周期归属知识库文件，不随对话删除
+    # 清理用户查询图片（query_images/ 路径，生命周期归属对话）
+    try:
+        messages = repo.list_messages(session_id, limit=1000)
+        oss_keys = [m["query_image_oss_key"] for m in messages if m.get("query_image_oss_key")]
+        if oss_keys:
+            from app.services.oss_service import get_oss_service
+            get_oss_service().delete_objects(oss_keys)
+            logger.info(f"已清理会话 {session_id} 的 {len(oss_keys)} 张查询图片")
+    except Exception as e:
+        logger.warning(f"查询图片 OSS 清理失败（继续删除会话）: {e}")
+
+    # 删除会话（CASCADE 删 conversation_message）
+    # 切片图片（conversation_assets/）生命周期归属知识库文件，不随对话删除
     repo.delete_session(session_id)
     logger.info(f"会话已删除: {session_id}")

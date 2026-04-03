@@ -114,6 +114,11 @@
             <el-form-item label="返回 Chunk 数">
               <el-input-number v-model="retrievalForm.single_doc_top_k" :min="1" :max="100" style="width:120px" />
             </el-form-item>
+            <el-divider content-position="left">生成配置</el-divider>
+            <el-form-item label="送给 LLM 的切片数">
+              <el-input-number v-model="retrievalForm.llm_context_top_k" :min="1" :max="20" style="width:120px" />
+              <div class="tip">检索后最终送入 LLM 的切片上限，影响回答质量与 token 消耗</div>
+            </el-form-item>
           </el-form>
           <template #footer>
             <el-button @click="retrievalDialogVisible = false">取消</el-button>
@@ -165,23 +170,32 @@
             </el-form-item>
 
             <el-divider content-position="left">向量配置</el-divider>
-            <el-form-item label="Embedding 模型">
-              <el-select v-model="colForm.embedding_model" @change="onModelChange" style="width:320px">
-                <el-option label="text-embedding-v3（支持自定义维度）" value="text-embedding-v3" />
-                <el-option label="text-embedding-v4（支持 1536 / 2048 维）" value="text-embedding-v4" />
-              </el-select>
-            </el-form-item>
-            <el-form-item label="向量维度">
-              <el-select v-model="colForm.dimension" style="width:200px">
-                <el-option
-                  v-for="d in availableDims"
-                  :key="d"
-                  :label="`${d} 维`"
-                  :value="d"
-                />
-              </el-select>
-              <span class="tip" style="margin-left:8px">{{ dimTip }}</span>
-            </el-form-item>
+            <template v-if="colForm.kb_type === 'standard'">
+              <el-form-item label="Embedding 模型">
+                <el-select v-model="colForm.embedding_model" @change="onModelChange" style="width:320px">
+                  <el-option label="text-embedding-v3（支持自定义维度）" value="text-embedding-v3" />
+                  <el-option label="text-embedding-v4（支持 1536 / 2048 维）" value="text-embedding-v4" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="向量维度">
+                <el-select v-model="colForm.dimension" style="width:200px">
+                  <el-option v-for="d in availableDims" :key="d" :label="`${d} 维`" :value="d" />
+                </el-select>
+                <span class="tip" style="margin-left:8px">{{ dimTip }}</span>
+              </el-form-item>
+            </template>
+            <template v-else>
+              <el-form-item label="Embedding 模型">
+                <el-tag type="success">qwen3-vl-embedding（自动）</el-tag>
+                <div class="tip">多模态知识库固定使用 qwen3-vl-embedding，文字和图片在同一语义空间</div>
+              </el-form-item>
+              <el-form-item label="向量维度">
+                <el-select v-model="colForm.retrieval_config.image_vector_dim" style="width:200px">
+                  <el-option v-for="d in [256,512,768,1024,1536,2048,2560]" :key="d" :label="`${d} 维`" :value="d" />
+                </el-select>
+                <div class="tip">文本和图片向量统一使用此维度，推荐 1024</div>
+              </el-form-item>
+            </template>
             <el-form-item label="相似度算法">
               <el-radio-group v-model="colForm.metrics">
                 <el-radio value="cosine">余弦相似度（推荐）</el-radio>
@@ -209,6 +223,13 @@
             </el-form-item>
 
             <el-divider content-position="left">图文模式</el-divider>
+            <el-form-item label="知识库类型">
+              <el-radio-group v-model="colForm.kb_type">
+                <el-radio value="standard">标准（文本检索）</el-radio>
+                <el-radio value="multimodal">多模态（文本 + 图片联合检索）</el-radio>
+              </el-radio-group>
+              <div class="tip">多模态使用 qwen3-vl-embedding，文字和图片在同一语义空间，支持以文搜图</div>
+            </el-form-item>
             <el-form-item label="启用图文模式">
               <el-switch v-model="colForm.image_mode" active-text="开启" inactive-text="关闭" />
               <div class="tip">开启后上传文件将使用自定义 PDF 解析，提取图片并与切片关联，回答时可展示图片</div>
@@ -237,6 +258,11 @@
             </el-form-item>
             <el-form-item label="单文档：返回 Chunk 数">
               <el-input-number v-model="colForm.retrieval_config.single_doc_top_k" :min="1" :max="100" style="width:120px" />
+            </el-form-item>
+            <el-divider content-position="left">生成配置</el-divider>
+            <el-form-item label="送给 LLM 的切片数">
+              <el-input-number v-model="colForm.retrieval_config.llm_context_top_k" :min="1" :max="20" style="width:120px" />
+              <div class="tip">检索后最终送入 LLM 的切片上限，影响回答质量与 token 消耗</div>
             </el-form-item>
 
             <el-form-item>
@@ -383,6 +409,7 @@ const defaultColForm = () => ({
   hnsw_m: null, hnsw_ef_construction: null,
   pq_enable_bool: false, external_storage_bool: false,
   image_mode: false,
+  kb_type: 'standard',
   retrieval_config: {
     ranker: 'RRF',
     hybrid_alpha: 0.5,
@@ -390,6 +417,8 @@ const defaultColForm = () => ({
     multi_doc_group_size: 3,
     strict_group_size: false,
     single_doc_top_k: 20,
+    llm_context_top_k: 10,
+    image_vector_dim: 1024,
   },
 })
 const colForm = ref(defaultColForm())
@@ -429,6 +458,7 @@ const createCollection = async () => {
       name: colForm.value.collection,
       display_name: colForm.value.collection,
       image_mode: colForm.value.image_mode,
+      kb_type: colForm.value.kb_type,
       embedding_model: colForm.value.embedding_model || 'text-embedding-v3',
       vector_dim: colForm.value.dimension || 1024,
       metadata_fields: enabledFields,
@@ -458,7 +488,7 @@ const retrievalSaving = ref(false)
 const defaultRetrievalForm = () => ({
   ranker: 'RRF', hybrid_alpha: 0.5,
   multi_doc_top_k: 20, multi_doc_group_size: 3, strict_group_size: false,
-  single_doc_top_k: 20,
+  single_doc_top_k: 20, llm_context_top_k: 10,
 })
 const retrievalForm = ref(defaultRetrievalForm())
 
@@ -472,6 +502,7 @@ const openRetrievalDialog = (row) => {
     multi_doc_group_size:  rc.multi_doc_group_size  ?? 3,
     strict_group_size:     rc.strict_group_size     ?? false,
     single_doc_top_k:      rc.single_doc_top_k      ?? 20,
+    llm_context_top_k:     rc.llm_context_top_k     ?? 10,
   }
   retrievalDialogVisible.value = true
 }

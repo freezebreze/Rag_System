@@ -10,7 +10,7 @@ from .retrieval_strategy import determine_retrieval_strategy
 from .single_doc_retrieve import single_doc_retrieve
 from .multi_doc_retrieve import multi_doc_retrieve
 from .filter import filter_chunks
-from .rerank import rerank_chunks
+from .rerank import select_top_k_chunks
 from .generate import generate_answer
 from .quality_check import check_quality
 from .metrics import finalize_metrics
@@ -22,7 +22,7 @@ __all__ = [
     "single_doc_retrieve",
     "multi_doc_retrieve",
     "filter_chunks",
-    "rerank_chunks",
+    "select_top_k_chunks",
     "generate_answer",
     "check_quality",
     "finalize_metrics",

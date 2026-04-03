@@ -44,6 +44,12 @@ def single_doc_retrieve(state: KnowledgeAgentState) -> KnowledgeAgentState:
         hybrid_alpha = _cfg.hybrid_alpha     if _cfg else 0.5
         top_k        = _cfg.single_doc_top_k if _cfg else 20
         keyword_filter = _cfg.keyword_filter if _cfg else None
+        llm_context_top_k = _cfg.llm_context_top_k if _cfg else 5
+
+        # 多模态知识库走专用检索节点
+        if getattr(_cfg, "kb_type", "standard") == "multimodal":
+            from .multimodal_retrieve import multimodal_retrieve
+            return multimodal_retrieve(state)
 
         logger.info(f"[SingleDocRetrieve] 开始单文档检索: {query}")
         logger.info(f"[SingleDocRetrieve] 检索策略: {retrieval_strategy.value}, collection={collection}, ranker={ranker}, top_k={top_k}")
@@ -86,7 +92,11 @@ def single_doc_retrieve(state: KnowledgeAgentState) -> KnowledgeAgentState:
         
         duration = (datetime.now() - start_time).total_seconds() * 1000
         
-        logger.info(f"[SingleDocRetrieve] 检索完成 ({duration:.0f}ms): 找到 {len(chunks)} 个结果")
+        # 按分数截断到 llm_context_top_k，与 multi_doc 路径行为一致
+        chunks = sorted(chunks, key=lambda c: c.get("score", 0.0) if isinstance(c, dict) else getattr(c, "score", 0.0), reverse=True)
+        chunks = chunks[:llm_context_top_k]
+
+        logger.info(f"[SingleDocRetrieve] 检索完成 ({duration:.0f}ms): 找到 {len(chunks)} 个结果（截断至 {llm_context_top_k}）")
         
         # 更新metrics
         metrics = state["metrics"]

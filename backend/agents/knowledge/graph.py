@@ -13,15 +13,13 @@ Workflow:
   determine_retrieval_strategy  - 判断 keyword / hybrid
     ↓
   ┌─────────────────────────────────────────┐
-  │ single_doc_retrieve                     │  top_k=20, Milvus RRF hybrid
-  │   → relevance_filter (LLM 二次过滤)     │
+  │ single_doc_retrieve                     │  top_k=20, Milvus RRF hybrid   │
   │   → generate_answer                     │
   └─────────────────────────────────────────┘
   ┌─────────────────────────────────────────┐
   │ multi_doc_retrieve                      │  top_k=50, Milvus RRF hybrid
-  │   → filter_chunks (score 阈值过滤)      │
-  │   → rerank_chunks  (按分数排序取 top-K) │
-  │   → relevance_filter (LLM 二次过滤)     │
+  │   → filter_chunks (score 阈值过滤)      │  │
+  │   → select_top_k_chunks (排序截断)      │
   │   → generate_answer                     │
   └─────────────────────────────────────────┘
     ↓
@@ -43,7 +41,7 @@ from .nodes import (
     single_doc_retrieve,
     multi_doc_retrieve,
     filter_chunks,
-    rerank_chunks,
+    select_top_k_chunks,
     generate_answer,
     check_quality,
     finalize_metrics
@@ -55,9 +53,9 @@ def route_by_query_type(state: KnowledgeAgentState) -> Literal["single_doc_retri
     return "single_doc_retrieve" if state.get("query_type") == "single_doc" else "multi_doc_retrieve"
 
 
-def route_after_single_retrieve(state: KnowledgeAgentState) -> Literal["relevance_filter"]:
-    """single_doc 路径：跳过 filter/rerank，直接进 LLM 二次过滤"""
-    return "relevance_filter"
+# def route_after_single_retrieve(state: KnowledgeAgentState) -> Literal["relevance_filter"]:
+#     """single_doc 路径：跳过 filter/rerank，直接进 LLM 二次过滤"""
+#     return "relevance_filter"
 
 
 def route_after_multi_retrieve(state: KnowledgeAgentState) -> Literal["filter_chunks"]:
@@ -90,7 +88,7 @@ def create_knowledge_agent(checkpointer=None):
     builder.add_node("single_doc_retrieve", single_doc_retrieve)
     builder.add_node("multi_doc_retrieve", multi_doc_retrieve)
     builder.add_node("filter_chunks", filter_chunks)
-    builder.add_node("rerank_chunks", rerank_chunks)
+    builder.add_node("select_top_k_chunks", select_top_k_chunks)
     builder.add_node("generate_answer", generate_answer)
     builder.add_node("check_quality", check_quality)
     builder.add_node("finalize_metrics", finalize_metrics)
@@ -115,8 +113,8 @@ def create_knowledge_agent(checkpointer=None):
 
     # multi_doc 路径：score 过滤 → rerank → generate
     builder.add_edge("multi_doc_retrieve", "filter_chunks")
-    builder.add_edge("filter_chunks", "rerank_chunks")
-    builder.add_edge("rerank_chunks", "generate_answer")
+    builder.add_edge("filter_chunks", "select_top_k_chunks")
+    builder.add_edge("select_top_k_chunks", "generate_answer")
 
     builder.add_conditional_edges(
         "generate_answer",
@@ -133,7 +131,7 @@ def create_knowledge_agent(checkpointer=None):
     graph = builder.compile(checkpointer=checkpointer)
 
     print("[Graph] Knowledge Agent created")
-    print("[Graph] single_doc: rewrite→classify→strategy→single_retrieve(Milvus hybrid)→relevance_filter→generate")
-    print("[Graph] multi_doc:  rewrite→classify→strategy→multi_retrieve→filter→rerank→relevance_filter→generate")
+    print("[Graph] single_doc: rewrite→classify→strategy→single_retrieve(Milvus hybrid)→generate")
+    print("[Graph] multi_doc:  rewrite→classify→strategy→multi_retrieve→filter→rerank→generate")
 
     return graph

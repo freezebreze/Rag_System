@@ -19,6 +19,8 @@ async def invoke_knowledge_qa(
     collection: Optional[str] = None,
     force_multi_doc: Optional[bool] = None,
     keyword_filter: Optional[str] = None,
+    query_image_url: Optional[str] = None,
+    query_image_oss_key: Optional[str] = None,
 ) -> dict:
     """调用 Knowledge Agent 执行 RAG 问答。"""
     if model_name not in SUPPORTED_MODELS:
@@ -62,6 +64,11 @@ async def invoke_knowledge_qa(
             multi_doc_group_size=rc.get("multi_doc_group_size", 3),
             strict_group_size=rc.get("strict_group_size", False),
             single_doc_top_k=rc.get("single_doc_top_k", 20),
+            llm_context_top_k=rc.get("llm_context_top_k", 10),
+            # 多模态
+            kb_type=kb.get("kb_type", "standard") if kb else "standard",
+            query_image_url=query_image_url,
+            image_vector_dim=rc.get("image_vector_dim", 1024),
             # 用户请求级覆盖（优先级高于 kb 配置）
             force_multi_doc=force_multi_doc,
             keyword_filter=keyword_filter,
@@ -118,11 +125,12 @@ async def invoke_knowledge_qa(
             answer_text = result["answer"] or ""
             phs = list(set(_re.findall(r'<<IMAGE:[0-9a-f]+>>', answer_text)))
 
-            # 存用户消息
+            # 存用户消息（含查询图片 oss_key，用于历史显示和清理）
             conv_repo.add_message(
                 session_id=session_id,
                 role="user",
                 content=query,
+                query_image_oss_key=query_image_oss_key,
             )
             # 存 assistant 消息（content 存占位符原文，不存 URL）
             conv_repo.add_message(

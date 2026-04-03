@@ -155,11 +155,21 @@ async def upsert_job_to_milvus(job_id: str) -> dict:
 
     from app.services.milvus_service import get_milvus_service
     milvus_svc = get_milvus_service()
-    milvus_svc.get_or_create_collection(kb["name"], dim=kb["vector_dim"])
-    result = await asyncio.to_thread(
-        milvus_svc.upsert_chunks, kb["name"], milvus_chunks,
-        kb["vector_dim"], kb.get("embedding_model"), kb.get("metadata_fields") or []
+    milvus_svc.get_or_create_collection(
+        kb["name"], dim=kb["vector_dim"],
+        kb_type=kb.get("kb_type", "standard"),
+        image_vector_dim=kb.get("retrieval_config", {}).get("image_vector_dim", 1024),
     )
+
+    if kb.get("kb_type") == "multimodal":
+        result = await asyncio.to_thread(
+            _upsert_multimodal_chunks, kb, job_id, milvus_chunks
+        )
+    else:
+        result = await asyncio.to_thread(
+            milvus_svc.upsert_chunks, kb["name"], milvus_chunks,
+            kb["vector_dim"], kb.get("embedding_model"), kb.get("metadata_fields") or []
+        )
     job_repo.mark_vectorized(job_id)
     return result
 
@@ -251,3 +261,87 @@ def _extract_text(file_content: bytes, ext: str, file_name: str) -> str:
     else:
         # 尝试 UTF-8 文本
         return file_content.decode("utf-8", errors="ignore")
+
+
+# ── 多模态向量化 ──────────────────────────────────────────────────────────────
+
+def _upsert_multimodal_chunks(kb: dict, job_id: str, milvus_chunks: list) -> dict:
+    """
+    多模态知识库向量化：
+    - 文本向量：qwen3-vl-embedding embed_text（与图片在同一语义空间）
+    - 图片向量：qwen3-vl-embedding embed_image（nullable，无图片切片设为 None）
+    """
+    from app.services.multimodal_embedding_service import get_multimodal_embedding_service
+    from app.services.milvus_service import get_milvus_service
+    from app.services.oss_service import get_oss_service
+    from app.db import get_chunk_image_repository
+
+    mm_svc = get_multimodal_embedding_service()
+    milvus_svc = get_milvus_service()
+    oss_svc = get_oss_service()
+    img_repo = get_chunk_image_repository()
+    # 多模态 kb 的 vector_dim 已在创建时与 image_vector_dim 强制对齐
+    image_dim = kb.get("vector_dim", 1024)
+    kb_name = kb["name"]
+
+    # 批量查询所有切片的图片记录
+    chunk_ids = [c["chunk_id"] for c in milvus_chunks]
+    img_records = img_repo.get_by_chunk_ids(chunk_ids) if chunk_ids else []
+    # chunk_id → 第一张图片的 oss_key
+    chunk_img_map: dict = {}
+    for r in img_records:
+        cid = r["chunk_id"]
+        if cid not in chunk_img_map:
+            chunk_img_map[cid] = r["oss_key"]
+
+    data = []
+    for chunk in milvus_chunks:
+        content = chunk["content"]
+        if not content:
+            continue
+
+        # 文本向量（qwen3-vl-embedding，与图片同语义空间）
+        try:
+            text_vec = mm_svc.embed_text(content, dimension=image_dim)
+        except Exception as e:
+            logger.error(f"[MultimodalUpsert] 文本向量化失败 chunk_id={chunk['chunk_id']}: {e}")
+            continue
+
+        # 图片向量（有图片则生成，否则填零向量，IP 相似度下零向量得分为 0 不影响排名）
+        image_vec = [0.0] * image_dim
+        oss_key = chunk_img_map.get(chunk["chunk_id"])
+        if oss_key:
+            try:
+                img_url = oss_svc.get_presigned_url(oss_key, expires=600)
+                vec = mm_svc.embed_image(img_url, dimension=image_dim)
+                if vec:
+                    image_vec = vec
+            except Exception as e:
+                logger.warning(f"[MultimodalUpsert] 图片向量化失败，填零向量: {e}")
+
+        row = {
+            "chunk_id":    chunk["chunk_id"],
+            "job_id":      job_id,
+            "file_name":   chunk.get("file_name", ""),
+            "chunk_index": int(chunk.get("chunk_index", 0)),
+            "content":     content,
+            "dense":       text_vec,
+            "image_dense": image_vec,  # None → Milvus nullable 字段
+        }
+        for k, v in (chunk.get("metadata") or {}).items():
+            if k not in row:
+                row[k] = v
+        data.append(row)
+
+    if not data:
+        return {"upsert_count": 0}
+
+    batch_size = 50  # 多模态向量化较慢，批次小一点
+    total = 0
+    for i in range(0, len(data), batch_size):
+        batch = data[i: i + batch_size]
+        res = milvus_svc.client.upsert(collection_name=kb_name, data=batch)
+        total += res.get("upsert_count", len(batch))
+
+    logger.info(f"[MultimodalUpsert] upsert {total} 条到 {kb_name}")
+    return {"upsert_count": total}

@@ -19,6 +19,7 @@ class KbRepository(BaseRepository):
         display_name: Optional[str] = None,
         description: Optional[str] = None,
         image_mode: bool = False,
+        kb_type: str = "standard",
         embedding_model: str = "text-embedding-v3",
         vector_dim: int = 1536,
         metadata_fields: Optional[list] = None,
@@ -27,11 +28,11 @@ class KbRepository(BaseRepository):
         import json
         rows = self._execute_returning(
             """
-            INSERT INTO knowledge_base(name, display_name, description, image_mode, embedding_model, vector_dim, metadata_fields, retrieval_config)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO knowledge_base(name, display_name, description, image_mode, kb_type, embedding_model, vector_dim, metadata_fields, retrieval_config)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING *
             """,
-            (name, display_name or name, description, image_mode, embedding_model, vector_dim,
+            (name, display_name or name, description, image_mode, kb_type, embedding_model, vector_dim,
              json.dumps(metadata_fields or []), json.dumps(retrieval_config or {})),
         )
         return self._normalize(rows[0]) if rows else {}
@@ -110,6 +111,7 @@ class KbRepository(BaseRepository):
             "display_name": row.get("display_name"),
             "description": row.get("description"),
             "image_mode": bool(row.get("image_mode", False)),
+            "kb_type": row.get("kb_type", "standard"),
             "embedding_model": row.get("embedding_model", "text-embedding-v3"),
             "vector_dim": row.get("vector_dim", 1536),
             "metadata_fields": mf or [],

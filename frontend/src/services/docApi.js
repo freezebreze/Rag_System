@@ -75,6 +75,10 @@ export const docApi = {
   resolveImages: (placeholders) =>
     axios.post(`${BASE}/chunks/resolve-images`, { placeholders }),
 
+  // 用户查询图片（oss_key → 预签名 URL）
+  resolveQueryImages: (oss_keys) =>
+    axios.post(`${BASE}/chunks/resolve-oss-keys`, { oss_keys }),
+
   // ── 对话会话 ──────────────────────────────────────────────────────────────
   listSessions: (kbName, userId = 'default') =>
     axios.get(`${BASE}/conversations`, { params: { kb_name: kbName, user_id: userId } }),

@@ -148,7 +148,10 @@
 
           <div class="bubble-wrap">
             <div class="bubble" :class="msg.role">
-              <div class="bubble-text" v-if="!msg.isHtml" style="white-space:pre-wrap">{{ msg.content }}</div>
+              <div class="bubble-text" v-if="!msg.isHtml" style="white-space:pre-wrap">
+                <img v-if="msg.queryImagePreview" :src="msg.queryImagePreview" style="max-width:120px;border-radius:6px;margin-bottom:4px;display:block" />
+                {{ msg.content }}
+              </div>
               <div class="bubble-text" v-else v-html="msg.content" />
 
               <!-- Tools -->
@@ -214,6 +217,13 @@
 
     <!-- Input area -->
     <div class="input-area" :class="{ focused: inputFocused }">
+      <!-- 多模态图片预览 -->
+      <div v-if="queryImagePreview" class="query-image-preview">
+        <img :src="queryImagePreview" class="query-img-thumb" />
+        <button class="query-img-remove" @click="clearQueryImage" title="移除图片">
+          <svg viewBox="0 0 10 10" fill="none"><line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
       <div class="input-wrap">
         <el-input v-model="inputMessage" type="textarea"
           :autosize="{ minRows: 1, maxRows: 5 }"
@@ -224,6 +234,17 @@
           resize="none" />
         <span class="char-count" :class="{ warn: inputMessage.length > 800 }">{{ inputMessage.length }}</span>
       </div>
+      <!-- 多模态图片上传按钮（仅多模态知识库显示） -->
+      <template v-if="chatMode === 'knowledge' && isMultimodalKb">
+        <input ref="queryImageInput" type="file" accept="image/*" style="display:none" @change="onQueryImageChange" />
+        <button class="icon-btn img-upload-btn" :class="{ active: !!queryImagePreview }" @click="queryImageInput.click()" title="上传查询图片（多模态知识库）">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+            <rect x="3" y="3" width="18" height="18" rx="3"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <polyline points="21 15 16 10 5 21"/>
+          </svg>
+        </button>
+      </template>
       <button class="send-btn" :class="{ loading, disabled: !canSend }" :disabled="!canSend" @click="sendMessage">
         <transition name="icon-swap" mode="out-in">
           <span v-if="!loading" key="send" class="send-icon">
@@ -280,6 +301,47 @@ const keywordFilter = ref('')
 const toggleKeywordFilter = () => {
   keywordFilterEnabled.value = !keywordFilterEnabled.value
   if (!keywordFilterEnabled.value) keywordFilter.value = ''
+}
+
+// 多模态查询图片
+const queryImage = ref(null)      // File 对象
+const queryImagePreview = ref('') // base64 预览
+const queryImageInput = ref(null)
+const onQueryImageChange = (e) => {
+  const file = e.target.files[0]
+  if (!file) return
+  queryImage.value = file
+  const reader = new FileReader()
+  reader.onload = (ev) => { queryImagePreview.value = ev.target.result }
+  reader.readAsDataURL(file)
+}
+const clearQueryImage = () => {
+  queryImage.value = null
+  queryImagePreview.value = ''
+  if (queryImageInput.value) queryImageInput.value.value = ''
+}
+
+// 压缩图片并返回 base64（不含 data:xxx;base64, 前缀）
+const compressImageToBase64 = (file, maxSize = 800, quality = 0.7) => {
+  return new Promise((resolve) => {
+    const img = new Image()
+    const url = URL.createObjectURL(file)
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      let { width, height } = img
+      if (width > maxSize || height > maxSize) {
+        if (width > height) { height = Math.round(height * maxSize / width); width = maxSize }
+        else { width = Math.round(width * maxSize / height); height = maxSize }
+      }
+      const canvas = document.createElement('canvas')
+      canvas.width = width; canvas.height = height
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height)
+      const dataUrl = canvas.toDataURL('image/jpeg', quality)
+      resolve(dataUrl.split(',')[1] || null)
+    }
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(null) }
+    img.src = url
+  })
 }
 
 // 会话管理
@@ -384,6 +446,18 @@ const switchSession = async (session) => {
       }
     }
 
+    // 批量 resolve 用户查询图片（query_image_oss_key → 预签名 URL）
+    const queryImgOssKeys = histMsgs
+      .filter(m => m.role === 'user' && m.query_image_oss_key)
+      .map(m => m.query_image_oss_key)
+    let queryImgUrlMap = {}
+    if (queryImgOssKeys.length) {
+      try {
+        const rr = await docApi.resolveQueryImages(queryImgOssKeys)
+        queryImgUrlMap = rr.data.data || {}
+      } catch {}
+    }
+
     for (const m of histMsgs) {
       let content = m.content
       // 替换占位符为图片 markdown
@@ -392,10 +466,15 @@ const switchSession = async (session) => {
           if (urlMap[ph]) content = content.split(ph).join(`\n![image](${urlMap[ph]})\n`)
         }
       }
+      // 用户查询图片拼在消息内容前
+      let queryImgHtml = ''
+      if (m.role === 'user' && m.query_image_oss_key && queryImgUrlMap[m.query_image_oss_key]) {
+        queryImgHtml = `<img src="${queryImgUrlMap[m.query_image_oss_key]}" style="max-width:120px;border-radius:6px;margin-bottom:4px;display:block" />`
+      }
       messages.value.push({
         role: m.role,
-        isHtml: m.role === 'assistant',
-        content: m.role === 'assistant' ? md.render(content) : content,
+        isHtml: m.role === 'assistant' || !!queryImgHtml,
+        content: m.role === 'assistant' ? md.render(content) : (queryImgHtml + content),
         confidence: m.confidence,
         sources: m.sources || [],
         _showSources: false,
@@ -435,6 +514,12 @@ const canSend = computed(() =>
   inputMessage.value.trim() && !loading.value &&
   !(chatMode.value === 'knowledge' && !selectedCollection.value)
 )
+
+// 当前选中知识库是否为多模态
+const isMultimodalKb = computed(() => {
+  const col = collections.value.find(c => c.name === selectedCollection.value)
+  return col?.kb_type === 'multimodal'
+})
 const confColor = (c) => c > 0.7 ? '#2dd4a0' : c > 0.4 ? '#f5c842' : '#f06b6b'
 const scrollToBottom = () => nextTick(() => {
   if (messagesContainer.value) messagesContainer.value.scrollTop = messagesContainer.value.scrollHeight
@@ -444,17 +529,27 @@ const useSuggestion = (text) => { inputMessage.value = text; sendMessage() }
 const sendMessage = async () => {
   const text = inputMessage.value.trim()
   if (!canSend.value || !text) return
-  messages.value.push({ role: 'user', content: text, timestamp: new Date() })
+  // 用户消息：若有查询图片，把预览 URL 一起存入消息对象用于实时显示
+  const userMsg = { role: 'user', content: text, timestamp: new Date() }
+  if (queryImagePreview.value) userMsg.queryImagePreview = queryImagePreview.value
+  messages.value.push(userMsg)
   inputMessage.value = ''
   loading.value = true
   scrollToBottom()
   try {
     if (chatMode.value === 'knowledge') {
+      // 多模态：图片压缩后转 base64（最大 800px，质量 0.7，减小传输体积）
+      let queryImageBase64 = null
+      if (queryImage.value) {
+        queryImageBase64 = await compressImageToBase64(queryImage.value, 800, 0.7)
+      }
       const res = await apiService.knowledgeQA(
         text, props.model, currentSessionId.value || 'default', selectedCollection.value || null,
         forceMultiDoc.value || null,
         (keywordFilterEnabled.value && keywordFilter.value) ? keywordFilter.value : null,
+        queryImageBase64,
       )
+      clearQueryImage()
       const imageMap = res.image_map || {}
       let raw = res.answer || '抱歉，未收到有效回复。'
       Object.entries(imageMap).forEach(([ph, url]) => { raw = raw.split(ph).join(`\n![image](${url})\n`) })
@@ -485,6 +580,7 @@ watch(chatMode, () => { messages.value = []; currentSessionId.value = '' })
 watch(selectedCollection, async (val) => {
   messages.value = []
   currentSessionId.value = ''
+  clearQueryImage()
   if (val) await loadSessions()
 })
 const formatTime = (t) => new Date(t).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
@@ -701,7 +797,22 @@ defineExpose({ clearMessages })
   transition: background 0.15s, color 0.15s;
 }
 .kw-clear:hover { background: rgba(240,107,107,0.2); color: #f06b6b; }
-.kw-clear svg { width: 100%; height: 100%; }
+.img-upload-btn { color: rgba(255,255,255,0.35); }
+.img-upload-btn.active { color: #2dd4a0; }
+.query-image-preview {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px 0;
+}
+.query-img-thumb {
+  width: 48px; height: 48px; object-fit: cover; border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.12);
+}
+.query-img-remove {
+  width: 18px; height: 18px; border-radius: 50%; border: none; cursor: pointer;
+  background: rgba(240,107,107,0.2); color: #f06b6b;
+  display: flex; align-items: center; justify-content: center; padding: 3px;
+}
+.query-img-remove svg { width: 100%; height: 100%; }
 
 /* kw-slide transition */
 .kw-slide-enter-active { transition: all 0.25s cubic-bezier(0.34,1.56,0.64,1); }

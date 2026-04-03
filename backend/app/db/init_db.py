@@ -30,6 +30,7 @@ _TABLES = [
     # 已存在的表补列（幂等）
     "ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS metadata_fields JSONB NOT NULL DEFAULT '[]'",
     "ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS retrieval_config JSONB NOT NULL DEFAULT '{}'",
+    "ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS kb_type TEXT NOT NULL DEFAULT 'standard'",
 
     # 2. 类目（独立体系，和知识库无关）
     """
@@ -157,10 +158,12 @@ _TABLES = [
         sources             JSONB,
         confidence          FLOAT,
         image_placeholders  TEXT[] NOT NULL DEFAULT '{}',
+        query_image_oss_key TEXT,
         created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_conv_message_session ON conversation_message(session_id, created_at)",
+    "ALTER TABLE conversation_message ADD COLUMN IF NOT EXISTS query_image_oss_key TEXT",
 ]
 
 

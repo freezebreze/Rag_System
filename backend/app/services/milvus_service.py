@@ -40,8 +40,11 @@ class MilvusService:
         dim: int = 1536,
         image_mode: bool = False,
         metadata_fields: Optional[List[Dict[str, Any]]] = None,
+        kb_type: str = "standard",
+        image_vector_dim: int = 1024,
     ) -> None:
         """幂等建 collection。
+        kb_type="multimodal" 时额外加 image_dense 字段（nullable FLOAT_VECTOR）。
         metadata_fields: [{"key": "title", "type": "text", "fulltext": True, "index": False}, ...]
         fulltext=True 的字段会显式加入 schema 并开启 enable_match，支持 TEXT_MATCH 关键词检索。
         """
@@ -62,6 +65,13 @@ class MilvusService:
         )
         schema.add_field("sparse_bm25", DataType.SPARSE_FLOAT_VECTOR)
         schema.add_field("dense",       DataType.FLOAT_VECTOR, dim=dim)
+
+        # 多模态知识库：额外加图片向量字段（无图片切片填零向量，FLOAT_VECTOR 不支持 nullable）
+        if kb_type == "multimodal":
+            schema.add_field(
+                "image_dense", DataType.FLOAT_VECTOR, dim=image_vector_dim
+            )
+            logger.info(f"[Milvus] 多模态 collection，image_dense dim={image_vector_dim}")
 
         # 用户自定义元数据字段：fulltext=True 的显式加入 schema 并开启倒排索引
         fulltext_fields = []
@@ -99,6 +109,16 @@ class MilvusService:
             index_type="SPARSE_WAND",
             metric_type="BM25",
         )
+
+        # 多模态：为 image_dense 加 HNSW 索引
+        if kb_type == "multimodal":
+            index_params.add_index(
+                field_name="image_dense",
+                index_name="image_dense_hnsw",
+                index_type="HNSW",
+                metric_type="IP",
+                params={"M": 16, "efConstruction": 200},
+            )
 
         self.client.create_collection(
             collection_name=collection_name,
@@ -253,6 +273,8 @@ class MilvusService:
         group_by_field: Optional[str] = None,
         group_size: int = 1,
         strict_group_size: bool = False,
+        query_image_vector: Optional[List[float]] = None,
+        query_text_vector: Optional[List[float]] = None,  # 多模态：外部传入文字向量（qwen3-vl-embedding）
     ) -> List[Dict[str, Any]]:
         """Dense + BM25 双路混合检索。
         keyword_filter: 若传入，先用 TEXT_MATCH 倒排索引预过滤候选集，再做双路 ANN。
@@ -271,7 +293,8 @@ class MilvusService:
         else:
             final_filter = filter_expr
 
-        query_vector = get_embedding_service().embed_query(query)
+        # 文字向量：多模态时用外部传入的（qwen3-vl-embedding），否则用默认 embedding service
+        query_vector = query_text_vector if query_text_vector else get_embedding_service().embed_query(query)
 
         dense_kwargs: Dict[str, Any] = {
             "data": [query_vector],
@@ -299,9 +322,24 @@ class MilvusService:
 
         output_fields = ["chunk_id", "job_id", "file_name", "chunk_index", "content"]
 
+        reqs = [AnnSearchRequest(**dense_kwargs), AnnSearchRequest(**bm25_kwargs)]
+
+        # 多模态：加入图片向量检索路
+        if query_image_vector:
+            image_kwargs: Dict[str, Any] = {
+                "data": [query_image_vector],
+                "anns_field": "image_dense",
+                "param": {"metric_type": "IP", "params": {"ef": 100}},
+                "limit": top_k,
+            }
+            if final_filter:
+                image_kwargs["expr"] = final_filter
+            reqs.append(AnnSearchRequest(**image_kwargs))
+            logger.info(f"[Milvus] 多模态检索：加入 image_dense 路")
+
         search_kwargs: Dict[str, Any] = {
             "collection_name": collection_name,
-            "reqs": [AnnSearchRequest(**dense_kwargs), AnnSearchRequest(**bm25_kwargs)],
+            "reqs": reqs,
             "ranker": reranker,
             "limit": top_k,
             "output_fields": output_fields,

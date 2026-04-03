@@ -21,13 +21,15 @@ class MetadataFieldConfig(BaseModel):
 
 
 class RetrievalConfig(BaseModel):
-    ranker: str = "RRF"                  # "RRF" | "Weight"
-    rrf_k: int = 60                      # RRFRanker k 参数（内部使用，不暴露前端）
-    hybrid_alpha: float = 0.5            # WeightedRanker dense 权重
-    multi_doc_top_k: int = 20            # 多文档：返回组数
-    multi_doc_group_size: int = 3        # 多文档：每组 chunk 数
-    strict_group_size: bool = False      # 多文档：是否严格凑满 group_size
-    single_doc_top_k: int = 20          # 单文档：返回 chunk 数
+    ranker: str = "RRF"
+    rrf_k: int = 60
+    hybrid_alpha: float = 0.5
+    multi_doc_top_k: int = 20
+    multi_doc_group_size: int = 3
+    strict_group_size: bool = False
+    single_doc_top_k: int = 20
+    llm_context_top_k: int = 10
+    image_vector_dim: int = 1024             # 多模态知识库图片向量维度
 
 
 class CreateKbRequest(BaseModel):
@@ -35,6 +37,7 @@ class CreateKbRequest(BaseModel):
     display_name: Optional[str] = None
     description: Optional[str] = None
     image_mode: bool = False
+    kb_type: str = "standard"               # "standard" | "multimodal"
     embedding_model: str = "text-embedding-v3"
     vector_dim: int = 1536
     metadata_fields: Optional[List[MetadataFieldConfig]] = None
@@ -63,12 +66,23 @@ async def create_collection(req: CreateKbRequest):
     mf = [f.model_dump() for f in req.metadata_fields] if req.metadata_fields else []
     rc = req.retrieval_config.model_dump() if req.retrieval_config else {}
 
+    # 多模态 kb：强制使用 qwen3-vl-embedding，且 dense 和 image_dense 维度必须一致
+    embedding_model = req.embedding_model
+    vector_dim = req.vector_dim
+    if req.kb_type == "multimodal":
+        embedding_model = "qwen3-vl-embedding"
+        image_vector_dim = rc.get("image_vector_dim", 1024)
+        vector_dim = image_vector_dim  # dense 和 image_dense 用同一维度
+        rc["image_vector_dim"] = image_vector_dim
+
     # 在 Milvus 中创建 collection（传入 metadata_fields 以建倒排索引）
     get_milvus_service().get_or_create_collection(
         collection_name=req.name,
-        dim=req.vector_dim,
+        dim=vector_dim,
         image_mode=req.image_mode,
         metadata_fields=mf,
+        kb_type=req.kb_type,
+        image_vector_dim=rc.get("image_vector_dim", 1024),
     )
 
     # 在 PG 中记录配置
@@ -77,8 +91,9 @@ async def create_collection(req: CreateKbRequest):
         display_name=req.display_name,
         description=req.description,
         image_mode=req.image_mode,
-        embedding_model=req.embedding_model,
-        vector_dim=req.vector_dim,
+        kb_type=req.kb_type,
+        embedding_model=embedding_model,
+        vector_dim=vector_dim,
         metadata_fields=mf,
         retrieval_config=rc,
     )

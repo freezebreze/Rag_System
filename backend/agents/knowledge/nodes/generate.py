@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage
 
 from ..state import KnowledgeAgentState
 from app.core.config import settings
-from app.core.prompts import KNOWLEDGE_GENERATE_SYSTEM_GREETING, KNOWLEDGE_GENERATE_SYSTEM, KNOWLEDGE_GENERATE_SYSTEM_IMAGE
+from app.core.prompts import KNOWLEDGE_GENERATE_SYSTEM_GREETING, KNOWLEDGE_GENERATE_SYSTEM, KNOWLEDGE_GENERATE_SYSTEM_IMAGE, KNOWLEDGE_GENERATE_SYSTEM_MULTIMODAL
 
 
 def _convert_messages_to_dicts(messages) -> list:
@@ -65,6 +65,12 @@ def generate_answer(state: KnowledgeAgentState, config=None) -> Dict[str, Any]:
         model_name = config.get("configurable", {}).get("model") or rag_config.model
     else:
         model_name = rag_config.model or settings.default_model
+
+    # 多模态知识库强制使用 qwen3.5-plus（支持图片理解）
+    is_multimodal_kb = getattr(rag_config, "kb_type", "standard") == "multimodal"
+    query_image_url = getattr(rag_config, "query_image_url", None)
+    if is_multimodal_kb:
+        model_name = "qwen3.5-plus"
 
     api_key = settings.dashscope_api_key
 
@@ -165,6 +171,8 @@ def generate_answer(state: KnowledgeAgentState, config=None) -> Dict[str, Any]:
         # ── System prompt ────────────────────────────────────────────────────
         if is_greeting:
             system_prompt = KNOWLEDGE_GENERATE_SYSTEM_GREETING
+        elif is_multimodal_kb:
+            system_prompt = KNOWLEDGE_GENERATE_SYSTEM_MULTIMODAL.format(context=context_text)
         elif is_image_mode:
             system_prompt = KNOWLEDGE_GENERATE_SYSTEM_IMAGE.format(context=context_text)
         else:
@@ -177,38 +185,56 @@ def generate_answer(state: KnowledgeAgentState, config=None) -> Dict[str, Any]:
         history_dicts = _convert_messages_to_dicts(conversation_messages[:-1])
         messages.extend(history_dicts)
 
-        # Current user query
-        messages.append({"role": "user", "content": f"用户问题：{query}"})
+        # Current user query：多模态时把图片 URL 插入 content
+        if is_multimodal_kb and query_image_url:
+            user_content = [
+                {"image": query_image_url},
+                {"text": f"用户问题：{query}"},
+            ]
+            messages.append({"role": "user", "content": user_content})
+        else:
+            messages.append({"role": "user", "content": f"用户问题：{query}"})
 
         # ── MCP tools in DashScope format ────────────────────────────────────
         # tools disabled for now
         tools = None
 
-        print(f"[Generate] model={model_name}")
+        print(f"[Generate] model={model_name}, multimodal={is_multimodal_kb}, has_image={bool(query_image_url)}")
 
-        # ── First LLM call ───────────────────────────────────────────────────
-        call_kwargs = dict(
-            api_key=api_key,
-            model=model_name,
-            messages=messages,
-            result_format="message",
-        )
-
-        response = Generation.call(**call_kwargs)
-
-        if response.status_code != 200:
-            raise RuntimeError(
-                f"DashScope error {response.status_code}: {response.message}"
+        # ── LLM call ─────────────────────────────────────────────────────────
+        if is_multimodal_kb and query_image_url:
+            # 多模态：用 MultiModalConversation.call（支持图片 URL）
+            from dashscope import MultiModalConversation
+            response = MultiModalConversation.call(
+                api_key=api_key,
+                model=model_name,
+                messages=messages,
             )
-
-        assistant_output = response.output.choices[0].message
-
-        # ── Extract final answer (no tool loop) ──────────────────────────────
-        answer = (
-            assistant_output.get("content", "")
-            if isinstance(assistant_output, dict)
-            else getattr(assistant_output, "content", "")
-        ) or ""
+            if response.status_code != 200:
+                raise RuntimeError(f"DashScope multimodal error {response.status_code}: {response.message}")
+            content = response.output.choices[0].message.content
+            # MultiModalConversation 返回 content 是 list，取第一个 text
+            if isinstance(content, list):
+                answer = next((c.get("text", "") for c in content if "text" in c), "") or ""
+            else:
+                answer = str(content) if content else ""
+        else:
+            # 标准：用 Generation.call
+            call_kwargs = dict(
+                api_key=api_key,
+                model=model_name,
+                messages=messages,
+                result_format="message",
+            )
+            response = Generation.call(**call_kwargs)
+            if response.status_code != 200:
+                raise RuntimeError(f"DashScope error {response.status_code}: {response.message}")
+            assistant_output = response.output.choices[0].message
+            answer = (
+                assistant_output.get("content", "")
+                if isinstance(assistant_output, dict)
+                else getattr(assistant_output, "content", "")
+            ) or ""
 
         tools_used = []
 

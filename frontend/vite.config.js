@@ -16,6 +16,8 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
+        proxyTimeout: 120000,
+        timeout: 120000,
         // 不重写路径，保持 /api/v1 结构
       }
     }

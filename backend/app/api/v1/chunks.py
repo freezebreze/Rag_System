@@ -149,3 +149,22 @@ async def resolve_images(body: ResolveImagesRequest):
     """批量将占位符解析为预签名 URL，用于历史对话图片展示"""
     result = chunk_service.resolve_image_placeholders(body.placeholders)
     return JSONResponse(content={"success": True, "data": result})
+
+
+class ResolveOssKeysRequest(BaseModel):
+    oss_keys: list[str]
+
+
+@router.post("/resolve-oss-keys")
+async def resolve_oss_keys(body: ResolveOssKeysRequest):
+    """批量将 OSS key 解析为预签名 URL，用于用户查询图片历史展示"""
+    from app.services.oss_service import get_oss_service
+    oss_svc = get_oss_service()
+    result = {}
+    for key in body.oss_keys:
+        if key:
+            try:
+                result[key] = oss_svc.get_presigned_url(key, expires=3600)
+            except Exception:
+                pass
+    return JSONResponse(content={"success": True, "data": result})
