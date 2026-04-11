@@ -22,14 +22,15 @@ class FileRepository(BaseRepository):
         file_size: Optional[int] = None,
         mime_type: Optional[str] = None,
         status: str = "pending",
+        sync_graph: bool = False,
     ) -> Dict[str, Any]:
         rows = self._execute_returning(
             """
-            INSERT INTO knowledge_file(kb_id, category_file_id, file_name, oss_key, file_size, mime_type, status)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO knowledge_file(kb_id, category_file_id, file_name, oss_key, file_size, mime_type, status, sync_graph)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING *
             """,
-            (kb_id, category_file_id, file_name, oss_key, file_size, mime_type, status),
+            (kb_id, category_file_id, file_name, oss_key, file_size, mime_type, status, sync_graph),
         )
         return self._normalize(rows[0]) if rows else {}
 
@@ -84,9 +85,16 @@ class FileRepository(BaseRepository):
             "mime_type": row.get("mime_type"),
             "status": row.get("status", "pending"),
             "error_msg": row.get("error_msg"),
+            "sync_graph": row.get("sync_graph", False),
             "created_at": str(row["created_at"]) if row.get("created_at") else None,
             "updated_at": str(row["updated_at"]) if row.get("updated_at") else None,
         }
+
+    def update_sync_graph(self, file_id: str, sync_graph: bool) -> None:
+        self._execute_sql(
+            "UPDATE knowledge_file SET sync_graph = %s, updated_at = NOW() WHERE id = %s",
+            (sync_graph, file_id),
+        )
 
 
 _instance: Optional[FileRepository] = None

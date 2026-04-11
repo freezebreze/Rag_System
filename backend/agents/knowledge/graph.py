@@ -6,23 +6,29 @@ Defines the complete RAG workflow using LangGraph
 Workflow:
   START
     ↓
-  query_rewrite          - 改写用户提问，更新rewrite字段
+  query_rewrite          - 改写用户提问
     ↓
-  query_classify         - 判断 single_doc / multi_doc，更新query_type字段
+  query_classify         - 判断 single_doc / multi_doc
     ↓
-  determine_retrieval_strategy  - 判断 keyword / hybrid，更新retrieval_strategy
-    ↓根据retrieval_strategy、走不同的分支，在graph.py 中add_conditional_edges方法定义条件分支，再通过query_type字段，在检索时选不同的检索方式，具体检索逻辑先不讲
+  determine_retrieval_strategy  - 判断 keyword / hybrid
+    ↓  ───────────────────────────────────  （single vs multi 条件分支）
+  ┌────────────────────────────────────┐
+  │ kg_query_route    ← 并行/串行均可，  │
+  │ kg_graph_retrieve    设置深度标志、  │
+  │                       查图谱写入     │
+  │                       kg_graph_chunks│
+  └────────────────────────────────────┘
   ┌─────────────────────────────────────────┐
-  │ single_doc_retrieve                     │  top_k=20, Milvus RRF hybrid   │
-  │   → generate_answer                     │
+  │ single_doc_retrieve                     │  Milvus RRF hybrid   │
   └─────────────────────────────────────────┘
   ┌─────────────────────────────────────────┐
-  │ multi_doc_retrieve                      │  top_k=20, Milvus RRF hybrid
-  │   → filter_chunks (score 阈值过滤)      │  │
-  │   → select_top_k_chunks (排序截断)      │
-  │   → generate_answer                     │
+  │ multi_doc_retrieve                      │  Milvus RRF hybrid
+  │   → filter_chunks                       │
+  │   → select_top_k_chunks                 │
   └─────────────────────────────────────────┘
     ↓
+  generate_answer  ← 读取 merged_chunks + kg_graph_chunks
+    ↓               → 分节 prompt（向量 / 图谱）
   check_quality (conditional)
     ↓
   finalize_metrics
@@ -38,13 +44,15 @@ from .nodes import (
     query_rewrite,
     query_classify,
     determine_retrieval_strategy,
+    kg_query_route,
+    graph_retrieve,
     single_doc_retrieve,
     multi_doc_retrieve,
     filter_chunks,
     select_top_k_chunks,
     generate_answer,
     check_quality,
-    finalize_metrics
+    finalize_metrics,
 )
 
 
@@ -86,6 +94,8 @@ def create_knowledge_agent(checkpointer=None, interrupt_before: Optional[List[st
     builder.add_node("query_rewrite", query_rewrite)
     builder.add_node("query_classify", query_classify)
     builder.add_node("determine_retrieval_strategy", determine_retrieval_strategy)
+    builder.add_node("kg_query_route", kg_query_route)
+    builder.add_node("graph_retrieve", graph_retrieve)
     builder.add_node("single_doc_retrieve", single_doc_retrieve)
     builder.add_node("multi_doc_retrieve", multi_doc_retrieve)
     builder.add_node("filter_chunks", filter_chunks)
@@ -98,10 +108,13 @@ def create_knowledge_agent(checkpointer=None, interrupt_before: Optional[List[st
     builder.add_edge(START, "query_rewrite")
     builder.add_edge("query_rewrite", "query_classify")
     builder.add_edge("query_classify", "determine_retrieval_strategy")
+    # 知识图谱检索：每次都走（kg_query_route 设置深度，graph_retrieve 执行查询）
+    builder.add_edge("determine_retrieval_strategy", "kg_query_route")
+    builder.add_edge("kg_query_route", "graph_retrieve")
 
-    # 条件路由：single vs multi
+    # 条件路由：single vs multi（检索后与图谱结果汇聚）
     builder.add_conditional_edges(
-        "determine_retrieval_strategy",
+        "graph_retrieve",
         route_by_query_type,
         {
             "single_doc_retrieve": "single_doc_retrieve",
@@ -135,7 +148,6 @@ def create_knowledge_agent(checkpointer=None, interrupt_before: Optional[List[st
     graph = builder.compile(**compile_kw)
 
     print("[Graph] Knowledge Agent created")
-    print("[Graph] single_doc: rewrite→classify→strategy→single_retrieve(Milvus hybrid)→generate")
-    print("[Graph] multi_doc:  rewrite→classify→strategy→multi_retrieve→filter→rerank→generate")
+    print("[Graph] path: rewrite→classify→strategy→kg_query_route→graph_retrieve→{single|multi}_retrieve→generate")
 
     return graph

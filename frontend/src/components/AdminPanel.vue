@@ -1,7 +1,14 @@
 <template>
   <div class="admin-panel">
+    <!-- 知识图谱视图 -->
+    <KnowledgeGraphPanel
+      v-if="graphKbName"
+      :kb-name="graphKbName"
+      @back="graphKbName = ''"
+    />
+
     <!-- 知识库详情视图 -->
-    <div v-if="currentCollection">
+    <div v-else-if="currentCollection">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
         <el-button :icon="ArrowLeft" circle size="small" @click="currentCollection = null" />
         <span style="font-size:16px;font-weight:600">{{ currentCollection.display_name || currentCollection.name }}</span>
@@ -10,9 +17,9 @@
       </div>
       <el-tabs type="border-card">
         <el-tab-pane label="📤 上传文档" name="upload">
-      <DocUpload :collection="currentCollection.name"
-            :image-mode="currentCollection.image_mode"
-            @go-categories="$emit('go-categories')" />
+          <DocUpload :collection="currentCollection.name"
+                :image-mode="currentCollection.image_mode"
+                @go-categories="$emit('go-categories')" />
         </el-tab-pane>
         <el-tab-pane label="📚 文件列表" name="files">
           <DocList ref="docListRef" :collection="currentCollection.name" @view-chunks="openChunkEditor" />
@@ -64,10 +71,11 @@
                 <span>{{ formatMetaFields(row.metadata_fields) }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="180" fixed="right">
+            <el-table-column label="操作" width="260" fixed="right">
               <template #default="{ row }">
                 <el-button type="primary" size="small" plain @click="enterCollection(row)">管理</el-button>
                 <el-button type="warning" size="small" plain style="margin-left:4px" @click="openRetrievalDialog(row)">配置</el-button>
+                <el-button type="warning" size="small" plain style="margin-left:4px" @click="openKnowledgeGraph(row)">知识图谱</el-button>
                 <el-popconfirm
                   :title="`确认删除知识库「${row.name}」？`"
                   confirm-button-text="删除" cancel-button-text="取消"
@@ -313,7 +321,9 @@ import axios from 'axios'
 import DocUpload from './doc/DocUpload.vue'
 import DocList from './doc/DocList.vue'
 import DocSearch from './doc/DocSearch.vue'
+import DocJobList from './doc/DocJobList.vue'
 import ChunkEditorPanel from './doc/ChunkEditorPanel.vue'
+import KnowledgeGraphPanel from './doc/KnowledgeGraphPanel.vue'
 
 const props = defineProps({
   activeTab: { type: String, default: 'collections' }
@@ -359,6 +369,9 @@ const currentJobId = ref('')
 const chunkEditorReadonly = ref(false)
 const docListRef = ref(null)
 
+// 知识图谱视图
+const graphKbName = ref('')
+
 const enterCollection = (row) => { currentCollection.value = row }
 const onChunksFetched = (job) => { openChunkEditor(job.job_id) }
 const openChunkEditor = (jobId, readonly = false) => {
@@ -367,6 +380,9 @@ const openChunkEditor = (jobId, readonly = false) => {
   chunkEditorVisible.value = true
 }
 const onVectorized = () => { docListRef.value?.load() }
+const openKnowledgeGraph = (row) => {
+  graphKbName.value = row.name
+}
 
 // ── 配置信息 ──────────────────────────────────────────────────────────────────
 const config = ref(null)

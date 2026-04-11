@@ -68,7 +68,7 @@
           </el-button>
         </template>
 
-        <!-- 普通模式：拖拽上传 -->
+          <!-- 普通模式：拖拽上传 -->
         <el-upload
           v-else
           drag multiple
@@ -89,6 +89,14 @@
             </div>
           </template>
         </el-upload>
+
+        <!-- 同步到知识图谱开关 -->
+        <div style="margin-top:12px;display:flex;align-items:center;gap:8px">
+          <el-switch v-model="syncGraph" active-text="同步到知识图谱" inactive-text="不同步" />
+          <el-tooltip content="开启后，向量化完成时自动将切片同步到知识图谱，生成 chunks 关系三元组" placement="top">
+            <el-icon style="color:#909399;cursor:pointer"><QuestionFilled /></el-icon>
+          </el-tooltip>
+        </div>
       </el-card>
     </el-tab-pane>
 
@@ -157,6 +165,10 @@
               <el-input-number v-model="catConfig.imageDpi" :min="72" :max="300" :step="50" style="width:160px" />
               <span class="tip" style="margin-left:8px">截图分辨率，默认 150</span>
             </el-form-item>
+            <el-form-item label="同步到图谱">
+              <el-switch v-model="syncGraphCat" />
+              <span class="tip" style="margin-left:8px">向量化完成后自动同步到知识图谱</span>
+            </el-form-item>
           </template>
 
           <!-- 普通模式专属参数 -->
@@ -179,6 +191,10 @@
             <el-form-item label="Metadata">
               <el-tag type="info" size="small">自动注入</el-tag>
               <span class="tip" style="margin-left:8px">根据知识库配置自动提取文件名前缀等字段</span>
+            </el-form-item>
+            <el-form-item label="同步到图谱">
+              <el-switch v-model="syncGraphCat" />
+              <span class="tip" style="margin-left:8px">向量化完成后自动同步到知识图谱</span>
             </el-form-item>
           </template>
         </el-form>
@@ -225,7 +241,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import { UploadFilled } from '@element-plus/icons-vue'
+import { UploadFilled, QuestionFilled } from '@element-plus/icons-vue'
 import { docApi } from '@/services/docApi'
 
 const emit = defineEmits(['open-jobs', 'uploaded', 'go-categories'])
@@ -244,6 +260,9 @@ const collectionsLoading = ref(false)
 const selectedCollection = ref('')
 const chunking = ref(false)
 const chunkResult = ref(null)
+// 同步到知识图谱
+const syncGraph = ref(false)
+const syncGraphCat = ref(false)
 
 const config = ref({
   chunkSize: 800,
@@ -305,6 +324,7 @@ const uploadData = computed(() => ({
   chunk_overlap: config.value.chunkOverlap,
   zh_title_enhance: config.value.zhTitleEnhance,
   vl_enhance: config.value.vlEnhance,
+  sync_graph: syncGraph.value,
 }))
 
 const loadCategories = async () => {
@@ -377,6 +397,7 @@ const startChunking = async () => {
       zh_title_enhance: catConfig.value.zhTitleEnhance,
       vl_enhance: catConfig.value.vlEnhance,
       image_dpi: catConfig.value.imageDpi,
+      sync_graph: syncGraphCat.value,
     })
     chunkResult.value = res.data.data
     const { submitted, errors } = res.data.data

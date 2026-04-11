@@ -63,12 +63,12 @@ def create_app() -> FastAPI:
 
     app.include_router(v1_router, prefix="/api")
 
-    @app.exception_handler(AppError)
+    #@app.exception_handler(AppError)
     async def app_error_handler(request: Request, exc: AppError):
         logger.warning("业务异常", extra={"path": request.url.path, "error": exc.message})
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
 
-    @app.exception_handler(Exception)
+    #@app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception):
         logger.exception("未处理异常", extra={"path": exc.message})
         return JSONResponse(status_code=500, content={"detail": "服务器内部错误，请稍后重试"})

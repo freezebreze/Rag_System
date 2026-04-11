@@ -87,6 +87,9 @@ class Settings:
     langsmith_tracing: bool = os.getenv("LANGSMITH_TRACING", "false").lower() == "true"
     preload_graphs: bool = os.getenv("PRELOAD_GRAPHS", "false").lower() == "true"
 
+    # ── Knowledge Table（本机 Docker 部署）──────────────────────────────────────
+    knowledge_table_url: str = os.getenv("KNOWLEDGE_TABLE_URL", "http://localhost:8000")
+
     def __init__(self):
         _validate_env()
 

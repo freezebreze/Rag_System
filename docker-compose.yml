@@ -116,4 +116,5 @@ services:
       - kb-net
 networks:
   kb-net:
+    name: ai_agent_test_kb-net
     driver: bridge

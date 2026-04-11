@@ -104,6 +104,33 @@ class ChunkRepository(BaseRepository):
         )
         return [self._normalize(r) for r in rows]
 
+    def get_by_ids_with_file_names(self, chunk_ids: List[str]) -> List[Dict[str, Any]]:
+        """批量查询切片并 JOIN 文件名（知识图谱组装上下文等）"""
+        if not chunk_ids:
+            return []
+        placeholders = ",".join(["%s"] * len(chunk_ids))
+        rows = self._execute_select(
+            f"""
+            SELECT kc.*, kf.file_name
+            FROM knowledge_chunk kc
+            JOIN knowledge_job kj ON kj.id = kc.job_id
+            LEFT JOIN knowledge_file kf ON kf.id = kj.file_id
+            WHERE kc.id IN ({placeholders})
+            """,
+            tuple(chunk_ids),
+        )
+        out = []
+        for r in rows:
+            base = self._normalize(r)
+            file_name = r.get("file_name") or ""
+            base["file_name"] = file_name
+            meta = base.get("metadata") or {}
+            if file_name and "file_name" not in meta:
+                meta = {**meta, "file_name": file_name}
+            base["metadata"] = meta
+            out.append(base)
+        return out
+
     def list_all_job_ids(self) -> List[str]:
         rows = self._execute_select("SELECT DISTINCT job_id FROM knowledge_chunk")
         return [str(r["job_id"]) for r in rows if r.get("job_id")]

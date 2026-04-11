@@ -31,6 +31,8 @@ _TABLES = [
     "ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS metadata_fields JSONB NOT NULL DEFAULT '[]'",
     "ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS retrieval_config JSONB NOT NULL DEFAULT '{}'",
     "ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS kb_type TEXT NOT NULL DEFAULT 'standard'",
+    # knowledge_file 补列：图谱同步标识
+    "ALTER TABLE knowledge_file ADD COLUMN IF NOT EXISTS sync_graph BOOLEAN NOT NULL DEFAULT FALSE",
 
     # 2. 类目（独立体系，和知识库无关）
     """

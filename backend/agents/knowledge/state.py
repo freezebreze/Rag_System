@@ -154,6 +154,12 @@ class RAGConfig:
     # Memory settings
     memory_turns: int = 2  # 对话记忆轮数，每轮=1问+1答，默认保留最近2轮（4条消息）
 
+    # Knowledge graph（可由 knowledge_base.retrieval_config 覆盖）
+    kg_enabled: bool = True
+    kg_graph_id: Optional[str] = None   # WhyHow graph_id（优先）；未设则用 collection 名称
+    kg_top_k: int = 5
+    kg_timeout_seconds: float = 2.0
+
     # Generation settings
     enable_citations: bool = True
     enable_images: bool = True
@@ -262,6 +268,10 @@ class KnowledgeAgentState(TypedDict):
     query_complexity: Optional[str]  # "simple", "medium", "complex"
     query_keywords: List[str]
     query_entities: List[Dict[str, Any]]  # 提取的实体
+
+    # Knowledge graph（graph_retrieve 写入）
+    kg_deep_traversal: Optional[bool]
+    kg_graph_chunks: List[Dict[str, Any]]
     
     # ========== Retrieval Stage ==========
     # Raw retrieval results
@@ -393,6 +403,8 @@ def create_initial_state(
         "query_complexity": None,
         "query_keywords": [],
         "query_entities": [],
+        "kg_deep_traversal": None,
+        "kg_graph_chunks": [],
         
         # Retrieval
         "vector_chunks": [],

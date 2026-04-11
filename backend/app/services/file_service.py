@@ -29,6 +29,7 @@ def list_files(kb_name: str, limit: int = 200) -> dict:
 def delete_file(file_id: str) -> str:
     """
     联动删除：Milvus 向量 + OSS 图片 + PG 所有关联记录
+    如果文件有 sync_graph 标识，同时删除知识图谱数据
     返回被删除的 file_name
     """
     file_repo = get_file_repository()
@@ -38,6 +39,7 @@ def delete_file(file_id: str) -> str:
 
     file_name = file_record["file_name"]
     kb_id = file_record["kb_id"]
+    sync_graph = file_record.get("sync_graph", False)
 
     # 获取 kb_name 用于 Milvus 操作
     kb = get_kb_repository().get_by_id(kb_id)
@@ -49,6 +51,7 @@ def delete_file(file_id: str) -> str:
 
     if job and kb_name:
         job_id = job["id"]
+
         # 2. Milvus 删除向量
         try:
             from app.services.milvus_service import get_milvus_service
@@ -56,7 +59,20 @@ def delete_file(file_id: str) -> str:
         except Exception as e:
             logger.warning("Milvus 删除失败（继续）", extra={"job_id": job_id, "error": str(e)})
 
-        # 3. OSS 图片删除
+        # 3. 知识图谱删除（如果有 sync_graph 标识）
+        if sync_graph:
+            try:
+                from app.services.kg_graph_sync_service import get_kg_graph_sync_service
+                import asyncio
+                kg_sync = get_kg_graph_sync_service()
+                asyncio.get_event_loop().run_until_complete(
+                    kg_sync.delete_graph_by_job(job_id)
+                )
+                logger.info(f"[delete_file] 知识图谱已删除 job_id={job_id}")
+            except Exception as e:
+                logger.error(f"[delete_file] 知识图谱删除失败（继续）: {e}")
+
+        # 4. OSS 图片删除
         try:
             img_repo = get_chunk_image_repository()
             oss_keys = img_repo.get_oss_keys_by_job(job_id)
@@ -65,7 +81,7 @@ def delete_file(file_id: str) -> str:
         except Exception as e:
             logger.warning("OSS 图片删除失败（继续）", extra={"error": str(e)})
 
-    # 4. PG 级联删除（knowledge_file → knowledge_job → knowledge_chunk → knowledge_chunk_image）
+    # 5. PG 级联删除（knowledge_file → knowledge_job → knowledge_chunk → knowledge_chunk_image）
     # 如果关联了 __default__ 类目文件记录，一并清理
     category_file_id = file_record.get("category_file_id")
     if category_file_id:
@@ -83,7 +99,7 @@ def delete_file(file_id: str) -> str:
 
     file_repo.delete(file_id)
 
-    logger.info(f"文件已删除: {file_name}")
+    logger.info(f"文件已删除: {file_name}, sync_graph={sync_graph}")
     return file_name
 
 

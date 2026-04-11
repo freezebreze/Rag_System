@@ -44,11 +44,13 @@ async def run_job_pipeline(
     chunk_size: int,
     chunk_overlap: int,
     image_dpi: int,
+    sync_graph: bool = False,
 ) -> None:
     """
     完整流水线：
     pending → chunking → chunked → embedding → done
     任何阶段失败 → error
+    如果 sync_graph=True，向量化完成后同步到知识图谱
     """
     job_repo = get_job_repository()
     file_repo = get_file_repository()
@@ -171,6 +173,36 @@ async def upsert_job_to_milvus(job_id: str) -> dict:
             kb["vector_dim"], kb.get("embedding_model"), kb.get("metadata_fields") or []
         )
     job_repo.mark_vectorized(job_id)
+
+    # 如果用户选择了"同步到知识图谱"，向量化完成后同步到 KT
+    if file_record.get("sync_graph"):
+        try:
+            from app.services.kg_graph_sync_service import get_kg_graph_sync_service
+            kg_sync = get_kg_graph_sync_service()
+            # 构建 chunk 向量映射（从 milvus_chunks 中提取）
+            chunk_vectors = {
+                c["chunk_id"]: c.get("dense") or c.get("embedding", [])
+                for c in milvus_chunks
+            }
+            await kg_sync.sync_chunks_to_graph(
+                job_id=job_id,
+                kb_name=kb["name"],
+                file_name=file_record["file_name"],
+                chunks=[
+                    {
+                        "chunk_id": c["chunk_id"],
+                        "content": c["current_content"],
+                        "chunk_index": c["chunk_index"],
+                        "vector": chunk_vectors.get(c["chunk_id"], [])
+                    }
+                    for c in pg_chunks if c.get("current_content")
+                ],
+            )
+            logger.info(f"[pipeline] 图谱同步完成 job_id={job_id}")
+        except Exception as e:
+            # 图谱同步失败不影响主流程（向量库已成功）
+            logger.error(f"[pipeline] 图谱同步失败 job_id={job_id}: {e}")
+
     return result
 
 

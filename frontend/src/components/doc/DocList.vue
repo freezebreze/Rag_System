@@ -59,6 +59,15 @@
           </el-tag>
         </template>
       </el-table-column>
+      <!-- 知识图谱标识 -->
+      <el-table-column label="知识图谱" width="100" align="center">
+        <template #default="{ row }">
+          <el-tag v-if="row.sync_graph" type="warning" size="small">
+            🔗 已同步
+          </el-tag>
+          <span v-else style="color:#c0c4cc;font-size:12px">-</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="job.stage" label="阶段" width="90" align="center" show-overflow-tooltip />
       <el-table-column label="进度" width="70" align="center">
         <template #default="{ row }">

@@ -57,6 +57,7 @@ async def upload_document(
     chunk_size: int = 500,
     chunk_overlap: int = 50,
     image_dpi: int = 150,
+    sync_graph: bool = False,
 ) -> dict:
     """
     单文件上传入口：
@@ -109,6 +110,7 @@ async def upload_document(
         file_size=len(file_content),
         mime_type=_guess_mime(file_name),
         status="pending",
+        sync_graph=sync_graph,
     )
 
     job = get_job_repository().create(file_id=file_record["id"], kb_id=kb["id"])
@@ -126,10 +128,11 @@ async def upload_document(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         image_dpi=image_dpi,
+        sync_graph=sync_graph,
     )
 
-    logger.info(f"[upload] {file_name} → job_id={job_id}")
-    return {"job_id": job_id, "file_id": file_record["id"], "file_name": file_name}
+    logger.info(f"[upload] {file_name} → job_id={job_id}, sync_graph={sync_graph}")
+    return {"job_id": job_id, "file_id": file_record["id"], "file_name": file_name, "sync_graph": sync_graph}
 
 
 # ── 类目文件上传到 OSS ────────────────────────────────────────────────────────
@@ -191,6 +194,7 @@ async def start_chunking(
     chunk_size: int = 500,
     chunk_overlap: int = 50,
     image_dpi: int = 150,
+    sync_graph: bool = False,
 ) -> dict:
     """将类目下所有文件提交到知识库切分流水线，每个文件后台异步处理"""
     category = get_category_repository().get(category_id)
@@ -222,6 +226,7 @@ async def start_chunking(
                 oss_key=oss_key,
                 category_file_id=f["id"],
                 status="pending",
+                sync_graph=sync_graph,
             )
             job = job_repo.create(file_id=file_record["id"], kb_id=kb["id"])
             job_id = job["id"]
@@ -238,6 +243,7 @@ async def start_chunking(
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
                 image_dpi=image_dpi,
+                sync_graph=sync_graph,
             )
             submitted.append({"file_name": file_name, "job_id": job_id})
         except Exception as e:
@@ -260,6 +266,7 @@ async def _run_pipeline(
     chunk_size: int,
     chunk_overlap: int,
     image_dpi: int,
+    sync_graph: bool = False,
 ) -> None:
     from app.services.job_service import run_job_pipeline
     await run_job_pipeline(
@@ -273,6 +280,7 @@ async def _run_pipeline(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         image_dpi=image_dpi,
+        sync_graph=sync_graph,
     )
 
 

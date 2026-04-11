@@ -20,8 +20,9 @@ async def upload_document(
     chunk_size: int = Form(500),
     chunk_overlap: int = Form(50),
     image_dpi: int = Form(150),
+    sync_graph: bool = Form(False, description="是否同步到知识图谱"),
 ):
-    """单文件上传到知识库，后台异步切分+向量化"""
+    """单文件上传到知识库，后台异步切分+向量化，可选同步到知识图谱"""
     result = await document_service.upload_document(
         file_name=file.filename,
         file_content=await file.read(),
@@ -30,6 +31,7 @@ async def upload_document(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         image_dpi=image_dpi,
+        sync_graph=sync_graph,
     )
     return JSONResponse(content={
         "success": True,
@@ -81,6 +83,7 @@ async def start_chunking(
     chunk_size: int = Query(500),
     chunk_overlap: int = Query(50),
     image_dpi: int = Query(150),
+    sync_graph: bool = Query(False, description="是否同步到知识图谱"),
 ):
     """将类目下所有文件提交到知识库切分流水线"""
     result = await document_service.start_chunking(
@@ -90,6 +93,7 @@ async def start_chunking(
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         image_dpi=image_dpi,
+        sync_graph=sync_graph,
     )
     return JSONResponse(content={
         "success": True,

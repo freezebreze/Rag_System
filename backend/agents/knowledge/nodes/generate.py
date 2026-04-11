@@ -14,7 +14,60 @@ from langchain_core.messages import AIMessage
 
 from ..state import KnowledgeAgentState
 from app.core.config import settings
-from app.core.prompts import KNOWLEDGE_GENERATE_SYSTEM_GREETING, KNOWLEDGE_GENERATE_SYSTEM, KNOWLEDGE_GENERATE_SYSTEM_IMAGE, KNOWLEDGE_GENERATE_SYSTEM_MULTIMODAL
+from app.core.prompts import (
+    KNOWLEDGE_GENERATE_SYSTEM_GREETING,
+    KNOWLEDGE_GENERATE_SYSTEM,
+    KNOWLEDGE_GENERATE_SYSTEM_IMAGE,
+    KNOWLEDGE_GENERATE_SYSTEM_MULTIMODAL,
+    KNOWLEDGE_GENERATE_SYSTEM_VECTOR_GRAPH,
+    KNOWLEDGE_GENERATE_SYSTEM_VECTOR_GRAPH_IMAGE,
+    KNOWLEDGE_GENERATE_SYSTEM_VECTOR_GRAPH_MULTIMODAL,
+)
+
+
+def _chunk_to_source_block(chunk, index: int, graph_hint: Optional[str] = None) -> str:
+    """将单个 chunk 转换为带索引的源文本块"""
+    # 提取字段（兼容 dict 和 object 两种格式）
+    if isinstance(chunk, dict):
+        content = chunk.get("content", "")
+        file_name = chunk.get("file_name") or chunk.get("metadata", {}).get("file_name", "")
+        title = chunk.get("title") or file_name or "未知来源"
+        chunk_id = chunk.get("chunk_id") or chunk.get("id", "")
+    else:
+        content = getattr(chunk, "content", "")
+        file_name = getattr(chunk, "file_name", "") or ""
+        title = getattr(chunk, "title", None) or getattr(chunk, "source", None) or file_name or "未知来源"
+        chunk_id = getattr(chunk, "chunk_id", "") or getattr(chunk, "id", "")
+
+    # 截断超长内容
+    max_len = 800
+    if len(content) > max_len:
+        content = content[:max_len] + "..."
+
+    hint_line = f"\n    <hint>关系类型: {graph_hint}</hint>" if graph_hint else ""
+
+    return (
+        f'  <source name="{title}">\n'
+        f'    <chunk index="{index}">\n'
+        f'      <id>{chunk_id}</id>\n'
+        f"      <content>{content}</content>\n"
+        f"    </chunk>\n"
+        f"  </source>{hint_line}"
+    )
+
+
+def _collect_image_placeholders(chunks: list) -> list:
+    """从 chunks 中收集图片占位符"""
+    placeholders = []
+    pattern = re.compile(r"<<IMAGE:[0-9a-fA-F]+>>")
+    for chunk in chunks:
+        if isinstance(chunk, dict):
+            content = chunk.get("content", "")
+        else:
+            content = getattr(chunk, "content", "") or ""
+        found = pattern.findall(content)
+        placeholders.extend(found)
+    return placeholders
 
 
 def _sanitize_image_placeholders(answer: str, image_map: dict) -> str:
@@ -145,44 +198,83 @@ def prepare_generation_context(state: KnowledgeAgentState, config=None) -> Dict[
         except Exception:
             pass
 
-    context_parts.append("<knowledge_base>")
-    for i, chunk in enumerate(reranked_chunks, 1):
-        if isinstance(chunk, dict):
-            meta = chunk.get("metadata") or {}
-            file_name = chunk.get("file_name") or meta.get("file_name", "")
-            title = chunk.get("title") or meta.get("title") or file_name or "unknown"
-            content = chunk.get("content", "")
-            chunk_id = meta.get("chunk_id") or chunk.get("id", "")
-        else:
-            meta = getattr(chunk, "metadata", {}) or {}
-            file_name = getattr(chunk, "file_name", "") or ""
-            title = getattr(chunk, "title", None) or file_name or "unknown"
-            content = getattr(chunk, "content", "")
-            chunk_id = meta.get("chunk_id") or getattr(chunk, "chunk_id", "")
+    # ── 两节上下文：向量检索切片 vs 图谱关联切片 ──────────────────────────────
 
+    # 向量切片（merged_chunks）：做去重，保留所有 unique chunk_id
+    seen_ids: set = set()
+    unique_vector_chunks: list = []
+    for c in reranked_chunks:
+        cid = c.get("chunk_id") or c.get("id") or "" if isinstance(c, dict) else getattr(c, "chunk_id", None) or ""
+        if cid and cid not in seen_ids:
+            seen_ids.add(cid)
+            unique_vector_chunks.append(c)
+
+    # 图谱切片（kg_graph_chunks）：去重补集（不在向量切片里的）
+    kg_chunks_raw: list = state.get("kg_graph_chunks") or []
+    graph_only_chunks: list = []
+    for c in kg_chunks_raw:
+        cid = c.get("chunk_id") or "" if isinstance(c, dict) else getattr(c, "chunk_id", "")
+        if cid and cid not in seen_ids:
+            seen_ids.add(cid)
+            graph_only_chunks.append(c)
+
+    # ── 渲染向量上下文 ─────────────────────────────────────────────────────
+    vector_ctx_parts = []
+    for i, chunk in enumerate(unique_vector_chunks, 1):
+        vector_ctx_parts.append(_chunk_to_source_block(chunk, i - 1))
+
+    if vector_ctx_parts:
+        vector_ctx_parts.insert(0, "<knowledge_base>")
+        vector_ctx_parts.append("</knowledge_base>")
+    vector_context_text = "\n".join(vector_ctx_parts)
+
+    # ── 渲染图谱上下文 ─────────────────────────────────────────────────────
+    graph_ctx_parts = []
+    for i, chunk in enumerate(graph_only_chunks, 1):
+        # 图谱切片附带关系类型 hint
+        rels = chunk.get("relation_types", []) if isinstance(chunk, dict) else getattr(chunk, "relation_types", []) or []
+        hint = "; ".join(rels) if rels else ""
+        graph_ctx_parts.append(_chunk_to_source_block(chunk, i - 1, graph_hint=hint))
+
+    if graph_ctx_parts:
+        graph_ctx_parts.insert(0, "<knowledge_base>")
+        graph_ctx_parts.append("</knowledge_base>")
+    graph_context_text = "\n".join(graph_ctx_parts)
+
+    # 空图谱时用占位符（避免 prompt 模板里 {graph_context} 处空荡荡导致模型困惑）
+    if not graph_context_text.strip():
+        graph_context_text = "<knowledge_base>\n  <source name=\"（暂无图谱关联切片）\">\n    <chunk index=\"0\">\n      <content>（当前查询未在知识图谱中检索到相关切片）</content>\n    </chunk>\n  </source>\n</knowledge_base>"
+
+    # ── 收集图片占位符（两个来源都要） ────────────────────────────────────
+    for chunk in unique_vector_chunks:
+        phs = _collect_image_placeholders([chunk])
+        for ph in phs:
+            if ph not in image_map:
+                image_map[ph] = ""
+
+    if is_image_mode:
         try:
-            idx = int(chunk_id.rsplit("_", 1)[-1])
-        except (ValueError, IndexError):
-            idx = i - 1
+            from app.db import get_chunk_image_repository
+            chunk_ids_for_img = (
+                [c.get("chunk_id") for c in unique_vector_chunks if c.get("chunk_id")]
+                + [c.get("chunk_id") for c in graph_only_chunks if c.get("chunk_id")]
+            )
+            if chunk_ids_for_img:
+                img_records = get_chunk_image_repository().get_by_chunk_ids(list(set(chunk_ids_for_img)))
+                for r in img_records:
+                    ph = r.get("placeholder", "")
+                    ok = r.get("oss_key", "")
+                    if ok and ph and ph not in image_map:
+                        try:
+                            from app.services.oss_service import get_oss_service
+                            image_map[ph] = get_oss_service().get_presigned_url(ok, expires=3600)
+                        except Exception:
+                            from urllib.parse import quote
+                            image_map[ph] = f"/api/v1/documents/image-proxy?oss_key={quote(ok, safe='/')}"
+        except Exception:
+            pass
 
-        prev_index = idx - 1 if idx > 0 else None
-        next_index = idx + 1
-
-        nav_lines = ""
-        nav_lines += f"  <prev_chunk_index>{'null' if prev_index is None else prev_index}</prev_chunk_index>\n"
-        nav_lines += f"  <next_chunk_index>{next_index}</next_chunk_index>\n"
-
-        context_parts.append(
-            f'<source name="{title}">\n'
-            f'<chunk index="{idx}">\n'
-            f"{nav_lines}"
-            f"  <content>\n{content}\n  </content>\n"
-            f"</chunk>\n"
-            f"</source>"
-        )
-    context_parts.append("</knowledge_base>")
-    context_text = "\n".join(context_parts)
-
+    # ── 选择 prompt 模板 ───────────────────────────────────────────────────
     query_intent = state.get("query_intent", "general")
     is_greeting = query_intent == "general" and any(
         g in query.lower() for g in ["你好", "您好", "hello", "hi", "嗨"]
@@ -190,12 +282,28 @@ def prepare_generation_context(state: KnowledgeAgentState, config=None) -> Dict[
 
     if is_greeting:
         system_prompt = KNOWLEDGE_GENERATE_SYSTEM_GREETING
-    elif is_multimodal_kb:
-        system_prompt = KNOWLEDGE_GENERATE_SYSTEM_MULTIMODAL.format(context=context_text)
-    elif is_image_mode:
-        system_prompt = KNOWLEDGE_GENERATE_SYSTEM_IMAGE.format(context=context_text)
+    elif graph_only_chunks:
+        # 有图谱补集：使用两节 prompt
+        if is_multimodal_kb:
+            system_prompt = KNOWLEDGE_GENERATE_SYSTEM_VECTOR_GRAPH_MULTIMODAL.format(
+                vector_context=vector_context_text, graph_context=graph_context_text
+            )
+        elif is_image_mode:
+            system_prompt = KNOWLEDGE_GENERATE_SYSTEM_VECTOR_GRAPH_IMAGE.format(
+                vector_context=vector_context_text, graph_context=graph_context_text
+            )
+        else:
+            system_prompt = KNOWLEDGE_GENERATE_SYSTEM_VECTOR_GRAPH.format(
+                vector_context=vector_context_text, graph_context=graph_context_text
+            )
     else:
-        system_prompt = KNOWLEDGE_GENERATE_SYSTEM.format(context=context_text)
+        # 无图谱补集：退回到纯向量模板
+        if is_multimodal_kb:
+            system_prompt = KNOWLEDGE_GENERATE_SYSTEM_MULTIMODAL.format(context=vector_context_text)
+        elif is_image_mode:
+            system_prompt = KNOWLEDGE_GENERATE_SYSTEM_IMAGE.format(context=vector_context_text)
+        else:
+            system_prompt = KNOWLEDGE_GENERATE_SYSTEM.format(context=vector_context_text)
 
     messages = [{"role": "system", "content": system_prompt}]
 
@@ -212,10 +320,13 @@ def prepare_generation_context(state: KnowledgeAgentState, config=None) -> Dict[
     else:
         messages.append({"role": "user", "content": f"用户问题：{query}"})
 
+    # 全部上下文切片（向量 + 图，去重）供 sources / confidence 计算
+    all_ctx_chunks = unique_vector_chunks + graph_only_chunks
+
     return {
         "query": query,
-        "reranked_chunks": reranked_chunks,
-        "context_text": context_text,
+        "reranked_chunks": all_ctx_chunks,
+        "context_text": vector_context_text,
         "image_map": image_map,
         "messages": messages,
         "model_name": model_name,

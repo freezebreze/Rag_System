@@ -7,6 +7,8 @@ Each node represents a step in the RAG pipeline
 from .query_rewrite import query_rewrite
 from .query_classify import query_classify
 from .retrieval_strategy import determine_retrieval_strategy
+from .kg_query_route import kg_query_route
+from .graph_retrieve import graph_retrieve
 from .single_doc_retrieve import single_doc_retrieve
 from .multi_doc_retrieve import multi_doc_retrieve
 from .filter import filter_chunks
@@ -19,6 +21,8 @@ __all__ = [
     "query_rewrite",
     "query_classify",
     "determine_retrieval_strategy",
+    "kg_query_route",
+    "graph_retrieve",
     "single_doc_retrieve",
     "multi_doc_retrieve",
     "filter_chunks",

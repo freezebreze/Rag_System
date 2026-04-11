@@ -125,6 +125,11 @@ async def invoke_knowledge_qa(
             # 用户请求级覆盖（优先级高于 kb 配置）
             force_multi_doc=force_multi_doc,
             keyword_filter=keyword_filter,
+            # 知识图谱配置（可由 retrieval_config 覆盖）
+            kg_enabled=rc.get("kg_enabled", True),
+            kg_graph_id=rc.get("kg_graph_id"),
+            kg_top_k=rc.get("kg_top_k", 5),
+            kg_timeout_seconds=rc.get("kg_timeout_seconds", 2.0),
         ),
     )
 
@@ -252,6 +257,11 @@ async def stream_knowledge_qa_sse(
             image_vector_dim=rc.get("image_vector_dim", 1024),
             force_multi_doc=force_multi_doc,
             keyword_filter=keyword_filter,
+            # 知识图谱配置
+            kg_enabled=rc.get("kg_enabled", True),
+            kg_graph_id=rc.get("kg_graph_id"),
+            kg_top_k=rc.get("kg_top_k", 5),
+            kg_timeout_seconds=rc.get("kg_timeout_seconds", 2.0),
         ),
     )
 
