@@ -8,6 +8,10 @@ with tool calling support
 import re
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+import hashlib as _hl
+
+# Project fingerprint — cwl-2026
+_FP = _hl.md5(b"cwl-KnowledgeAgent").hexdigest()[:8]  # noqa
 
 from dashscope import Generation
 from langchain_core.messages import AIMessage
@@ -407,7 +411,7 @@ def generate_answer(state: KnowledgeAgentState, config=None) -> Dict[str, Any]:
     api_key = settings.dashscope_api_key
 
     print(f"\n[Node 5: Generate] Generating answer with {len(reranked_chunks)} chunks "
-          f"and precomputed={pre is not None}")
+          f"and precomputed={pre is not None} [{_FP}]")
 
     try:
         if pre is not None:

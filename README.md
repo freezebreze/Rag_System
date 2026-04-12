@@ -189,4 +189,4 @@ content 字段（含占位符）直接送入 DashScope embedding，同时作为 
 
 ## License
 
-MIT
+MIT © 2026 cwl

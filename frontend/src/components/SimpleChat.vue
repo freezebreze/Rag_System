@@ -1,4 +1,5 @@
 <template>
+  <!-- © cwl 2026 | Knowledge Agent | Unauthorized redistribution prohibited -->
   <div class="chat-wrapper">
     <!-- 知识库模式：会话侧边栏 -->
     <transition name="sidebar-slide">

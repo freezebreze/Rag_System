@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 FastAPI Application
+© 2026 cwl. All rights reserved.
 """
 import ssl
 import urllib3
@@ -23,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.core.logging import setup_logging
-from app.core.config import settings
+from app.core.config import settings, _cwl_fp
 from app.core.exceptions import AppError
 from app.api.v1 import router as v1_router
 
@@ -39,7 +40,7 @@ async def lifespan(app: FastAPI):
     logger.info("初始化 LangGraph checkpointer...")
     from app.core.checkpointer import init_checkpointer
     await init_checkpointer()
-    logger.info("应用启动完成")
+    logger.info("应用启动完成 | © 2026 cwl | fp=%s", _cwl_fp())
     yield
     from app.core.checkpointer import close_checkpointer
     await close_checkpointer()
