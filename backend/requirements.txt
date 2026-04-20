@@ -41,6 +41,9 @@ dashscope
 oss2
 alibabacloud_oss_v2
 
+# S3 兼容对象存储（Cloudflare R2）
+boto3
+
 # 文档解析
 pageindex
 pymupdf

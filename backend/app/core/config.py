@@ -20,14 +20,29 @@ load_dotenv()
 def _validate_env() -> None:
     """启动时校验必填配置"""
     missing = []
-    for key in ["DASHSCOPE_API_KEY", "OSS_BUCKET", "PG_HOST", "PG_USER", "PG_PASSWORD", "MILVUS_HOST"]:
+    for key in ["DASHSCOPE_API_KEY", "PG_HOST", "PG_USER", "PG_PASSWORD", "MILVUS_HOST"]:
         if not os.getenv(key):
             missing.append(key)
 
-    if not os.getenv("OSS_ACCESS_KEY_ID") and not os.getenv("ALIBABA_CLOUD_ACCESS_KEY_ID"):
-        missing.append("OSS_ACCESS_KEY_ID 或 ALIBABA_CLOUD_ACCESS_KEY_ID")
-    if not os.getenv("OSS_ACCESS_KEY_SECRET") and not os.getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET"):
-        missing.append("OSS_ACCESS_KEY_SECRET 或 ALIBABA_CLOUD_ACCESS_KEY_SECRET")
+    storage_provider = os.getenv("OBJECT_STORAGE_PROVIDER", "aliyun").lower()
+    if storage_provider not in {"aliyun", "r2"}:
+        missing.append("OBJECT_STORAGE_PROVIDER 必须是 aliyun 或 r2")
+
+    if not os.getenv("OSS_BUCKET") and not os.getenv("R2_BUCKET"):
+        missing.append("OSS_BUCKET 或 R2_BUCKET")
+
+    if storage_provider == "r2":
+        if not os.getenv("R2_ENDPOINT"):
+            missing.append("R2_ENDPOINT")
+        if not os.getenv("R2_ACCESS_KEY_ID") and not os.getenv("OSS_ACCESS_KEY_ID"):
+            missing.append("R2_ACCESS_KEY_ID 或 OSS_ACCESS_KEY_ID")
+        if not os.getenv("R2_SECRET_ACCESS_KEY") and not os.getenv("OSS_ACCESS_KEY_SECRET"):
+            missing.append("R2_SECRET_ACCESS_KEY 或 OSS_ACCESS_KEY_SECRET")
+    else:
+        if not os.getenv("OSS_ACCESS_KEY_ID") and not os.getenv("ALIBABA_CLOUD_ACCESS_KEY_ID"):
+            missing.append("OSS_ACCESS_KEY_ID 或 ALIBABA_CLOUD_ACCESS_KEY_ID")
+        if not os.getenv("OSS_ACCESS_KEY_SECRET") and not os.getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET"):
+            missing.append("OSS_ACCESS_KEY_SECRET 或 ALIBABA_CLOUD_ACCESS_KEY_SECRET")
 
     if missing:
         raise EnvironmentError(
@@ -76,12 +91,22 @@ class Settings:
     chunk_size: int = int(os.getenv("CHUNK_SIZE", "500"))
     chunk_overlap: int = int(os.getenv("CHUNK_OVERLAP", "50"))
 
-    # ── OSS ───────────────────────────────────────────────────────────────────
+    # ── 对象存储 ──────────────────────────────────────────────────────────────
+    object_storage_provider: str = os.getenv("OBJECT_STORAGE_PROVIDER", "aliyun").lower()
+
+    # Aliyun OSS
     oss_access_key_id: str = os.getenv("OSS_ACCESS_KEY_ID", os.getenv("ALIBABA_CLOUD_ACCESS_KEY_ID", ""))
     oss_access_key_secret: str = os.getenv("OSS_ACCESS_KEY_SECRET", os.getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET", ""))
     oss_region: str = os.getenv("OSS_REGION", "cn-shanghai")
     oss_endpoint: str = os.getenv("OSS_ENDPOINT", "https://oss-cn-shanghai.aliyuncs.com")
-    oss_bucket: str = os.getenv("OSS_BUCKET", "")
+    oss_bucket: str = os.getenv("OSS_BUCKET", os.getenv("R2_BUCKET", ""))
+
+    # Cloudflare R2（S3 API 兼容）
+    r2_access_key_id: str = os.getenv("R2_ACCESS_KEY_ID", os.getenv("OSS_ACCESS_KEY_ID", ""))
+    r2_secret_access_key: str = os.getenv("R2_SECRET_ACCESS_KEY", os.getenv("OSS_ACCESS_KEY_SECRET", ""))
+    r2_endpoint: str = os.getenv("R2_ENDPOINT", "")
+    r2_region: str = os.getenv("R2_REGION", "auto")
+    r2_bucket: str = os.getenv("R2_BUCKET", os.getenv("OSS_BUCKET", ""))
 
     # ── API Server ────────────────────────────────────────────────────────────
     api_host: str = os.getenv("API_HOST", "0.0.0.0")

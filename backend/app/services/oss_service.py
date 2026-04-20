@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-阿里云 OSS 服务
+对象存储服务
 负责文件上传和临时 URL 生成
 """
 
@@ -8,7 +8,6 @@ import logging
 import datetime
 from typing import Optional
 import urllib3
-import alibabacloud_oss_v2 as oss
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -18,9 +17,20 @@ logger = logging.getLogger(__name__)
 
 
 class OSSService:
-    """阿里云 OSS 服务"""
+    """对象存储服务，支持 Aliyun OSS 和 Cloudflare R2。"""
 
     def __init__(self):
+        self.provider = settings.object_storage_provider
+        if self.provider == "r2":
+            self._init_r2_client()
+            return
+
+        self._init_aliyun_client()
+
+    def _init_aliyun_client(self) -> None:
+        import alibabacloud_oss_v2 as oss
+
+        self.oss = oss
         credentials_provider = oss.credentials.StaticCredentialsProvider(
             access_key_id=settings.oss_access_key_id,
             access_key_secret=settings.oss_access_key_secret,
@@ -34,6 +44,24 @@ class OSSService:
         self.bucket = settings.oss_bucket
         logger.info(f"OSS 服务初始化: bucket={self.bucket}, region={settings.oss_region}")
 
+    def _init_r2_client(self) -> None:
+        import boto3
+        from botocore.config import Config
+
+        self.client = boto3.client(
+            "s3",
+            endpoint_url=settings.r2_endpoint,
+            aws_access_key_id=settings.r2_access_key_id,
+            aws_secret_access_key=settings.r2_secret_access_key,
+            region_name=settings.r2_region,
+            config=Config(
+                signature_version="s3v4",
+                s3={"addressing_style": "path"},
+            ),
+        )
+        self.bucket = settings.r2_bucket
+        logger.info(f"R2 服务初始化: bucket={self.bucket}, endpoint={settings.r2_endpoint}")
+
     def upload_bytes(self, object_key: str, file_content: bytes) -> str:
         """
         直接用完整 object_key 上传（document_service 专用）
@@ -46,8 +74,17 @@ class OSSService:
             object_key
         """
         try:
+            if self.provider == "r2":
+                self.client.put_object(
+                    Bucket=self.bucket,
+                    Key=object_key,
+                    Body=file_content,
+                )
+                logger.info(f"R2 上传成功: {object_key}")
+                return object_key
+
             result = self.client.put_object(
-                oss.PutObjectRequest(
+                self.oss.PutObjectRequest(
                     bucket=self.bucket,
                     key=object_key,
                     body=file_content,
@@ -73,8 +110,17 @@ class OSSService:
         """
         object_key = f"{category_name}/{file_name}"
         try:
+            if self.provider == "r2":
+                self.client.put_object(
+                    Bucket=self.bucket,
+                    Key=object_key,
+                    Body=file_content,
+                )
+                logger.info(f"R2 上传成功: {object_key}")
+                return object_key
+
             result = self.client.put_object(
-                oss.PutObjectRequest(
+                self.oss.PutObjectRequest(
                     bucket=self.bucket,
                     key=object_key,
                     body=file_content,
@@ -89,8 +135,18 @@ class OSSService:
     def get_object_bytes(self, object_key: str) -> bytes:
         """用 SDK 直接下载 OSS 对象，返回字节内容（后端专用，不需要预签名）"""
         try:
+            if self.provider == "r2":
+                result = self.client.get_object(Bucket=self.bucket, Key=object_key)
+                body = result["Body"]
+                try:
+                    data = body.read()
+                finally:
+                    body.close()
+                logger.info(f"R2 下载成功: {object_key}, size={len(data)}")
+                return data
+
             result = self.client.get_object(
-                oss.GetObjectRequest(bucket=self.bucket, key=object_key)
+                self.oss.GetObjectRequest(bucket=self.bucket, key=object_key)
             )
             with result.body as body:
                 data = body.read()
@@ -105,9 +161,24 @@ class OSSService:
         if not object_keys:
             return 0
         try:
-            objects = [oss.DeleteObject(key=k) for k in object_keys]
+            if self.provider == "r2":
+                deleted_count = 0
+                for i in range(0, len(object_keys), 1000):
+                    batch = object_keys[i: i + 1000]
+                    result = self.client.delete_objects(
+                        Bucket=self.bucket,
+                        Delete={
+                            "Objects": [{"Key": key} for key in batch],
+                            "Quiet": False,
+                        },
+                    )
+                    deleted_count += len(result.get("Deleted", []))
+                logger.info(f"R2 批量删除: 请求 {len(object_keys)} 个, 成功 {deleted_count} 个")
+                return deleted_count
+
+            objects = [self.oss.DeleteObject(key=k) for k in object_keys]
             result = self.client.delete_multiple_objects(
-                oss.DeleteMultipleObjectsRequest(bucket=self.bucket, objects=objects)
+                self.oss.DeleteMultipleObjectsRequest(bucket=self.bucket, objects=objects)
             )
             # alibabacloud_oss_v2 默认非静默模式：deleted_objects 包含所有成功删除的对象
             # 失败的对象不在此列表中（OSS 对不存在的对象也视为删除成功）
@@ -131,8 +202,17 @@ class OSSService:
             临时访问 URL
         """
         try:
+            if self.provider == "r2":
+                url = self.client.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": self.bucket, "Key": object_key},
+                    ExpiresIn=expires,
+                )
+                logger.info(f"生成 R2 临时 URL: {object_key}, expires={expires}s")
+                return url
+
             result = self.client.presign(
-                oss.GetObjectRequest(
+                self.oss.GetObjectRequest(
                     bucket=self.bucket,
                     key=object_key,
                 ),
