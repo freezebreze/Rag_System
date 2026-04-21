@@ -31,8 +31,6 @@ _TABLES = [
     "ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS metadata_fields JSONB NOT NULL DEFAULT '[]'",
     "ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS retrieval_config JSONB NOT NULL DEFAULT '{}'",
     "ALTER TABLE knowledge_base ADD COLUMN IF NOT EXISTS kb_type TEXT NOT NULL DEFAULT 'standard'",
-    # knowledge_file 补列：图谱同步标识
-    "ALTER TABLE knowledge_file ADD COLUMN IF NOT EXISTS sync_graph BOOLEAN NOT NULL DEFAULT FALSE",
 
     # 2. 类目（独立体系，和知识库无关）
     """
@@ -69,12 +67,15 @@ _TABLES = [
         file_size        BIGINT,
         mime_type        TEXT,
         status           TEXT NOT NULL DEFAULT 'pending',
+        sync_graph       BOOLEAN NOT NULL DEFAULT FALSE,
         error_msg        TEXT,
         created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         UNIQUE(kb_id, oss_key)
     )
     """,
+    # knowledge_file 补列：兼容已有数据库
+    "ALTER TABLE knowledge_file ADD COLUMN IF NOT EXISTS sync_graph BOOLEAN NOT NULL DEFAULT FALSE",
     "CREATE INDEX IF NOT EXISTS idx_kb_file_kb ON knowledge_file(kb_id)",
     "CREATE INDEX IF NOT EXISTS idx_kb_file_status ON knowledge_file(status)",
 
